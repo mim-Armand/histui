@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Histui Package Example</title>
+    <link rel="stylesheet" href="../src/styles.css">
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      #timeline {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="timeline"></div>
+    <script type="module">
+      import { createHistuiTimeline } from "../src/index.js";
+
+      const data = {
+        paststructVersion: "1.0",
+        dataset: {
+          id: "demo",
+          title: { en: "Histui Package Demo", fa: "نمونه بسته هیستویی" },
+          description: { en: "A tiny inline PastStruct dataset." },
+          defaultLanguage: "en",
+          languages: ["en", "fa"]
+        },
+        records: [
+          {
+            id: "event-1",
+            recordType: "event",
+            type: "political",
+            label: { en: "Founding Event", fa: "رخداد آغازین" },
+            description: { en: "The first event in the example timeline." },
+            emoji: "◆",
+            temporal: { dates: [{ rank: 1, confidence: "certain", date: { from: "1900-01-01" } }] },
+            significance: { value: 8, scale: 10, scope: "local" }
+          },
+          {
+            id: "period-1",
+            recordType: "period",
+            type: "cultural",
+            label: { en: "Long Period", fa: "دوره بلند" },
+            description: { en: "A longer historical period with a span." },
+            emoji: "▰",
+            temporal: { dates: [{ rank: 1, confidence: "probable", date: { from: "1915", to: "1945" } }] },
+            significance: { value: 6, scale: 10, scope: "regional" }
+          },
+          {
+            id: "event-2",
+            recordType: "event",
+            type: "scientific",
+            label: { en: "Later Turning Point", fa: "نقطه عطف بعدی" },
+            description: { en: "A later event connected to the same historical line." },
+            emoji: "✦",
+            temporal: { dates: [{ rank: 1, confidence: "certain", date: { from: "1979-02-11" } }] },
+            significance: { value: 9, scale: 10, scope: "global" }
+          }
+        ]
+      };
+
+      createHistuiTimeline({
+        container: "#timeline",
+        data,
+        explodeEnabled: true,
+        onSelect(record) {
+          console.log("Selected", record.id);
+        }
+      });
+    </script>
+  </body>
+</html>
+

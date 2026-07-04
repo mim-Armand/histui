@@ -1,0 +1,32 @@
+{
+  "name": "histui",
+  "version": "0.1.0",
+  "description": "Reusable Histui interactive timeline package for PastStruct and normalized historical records.",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "style": "./src/styles.css",
+  "exports": {
+    ".": "./src/index.js",
+    "./styles.css": "./src/styles.css"
+  },
+  "sideEffects": [
+    "./src/styles.css"
+  ],
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev-server.mjs",
+    "check": "node scripts/check.mjs"
+  },
+  "keywords": [
+    "history",
+    "timeline",
+    "paststruct",
+    "visualization"
+  ],
+  "license": "UNLICENSED"
+}
