@@ -169,7 +169,7 @@
 
 .histui-measurement-line {
   position: absolute;
-  z-index: 6;
+  z-index: 240;
   opacity: 0;
   pointer-events: none;
   transform: translateY(-4px);

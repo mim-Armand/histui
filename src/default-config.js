@@ -32,7 +32,7 @@ export const DEFAULT_HISTUI_CONFIG = {
     measurement: {
       enabled: false,
       transient: false,
-      fadeOutMs: 3000
+      fadeOutMs: 1200
     },
     lod: {
       enabled: true,

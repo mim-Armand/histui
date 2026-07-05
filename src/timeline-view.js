@@ -1575,13 +1575,13 @@ export class TimelineView {
 
   getMeasurementConfig() {
     const measurement = this.config.timeline?.measurement || {};
-    const fadeOutMs = Number(measurement.fadeOutMs ?? measurement.hideAfterMs ?? 3000);
+    const fadeOutMs = Number(measurement.fadeOutMs ?? measurement.hideAfterMs ?? 1200);
     return {
       enabled: measurement.enabled === true,
       transient: measurement.transient === true ||
         measurement.showOnChangeOnly === true ||
         measurement.visibleOnChangeOnly === true,
-      fadeOutMs: Number.isFinite(fadeOutMs) ? Math.max(0, fadeOutMs) : 3000,
+      fadeOutMs: Number.isFinite(fadeOutMs) ? Math.max(0, fadeOutMs) : 1200,
       offsetPx: Number.isFinite(Number(measurement.offsetPx)) ? Number(measurement.offsetPx) : null
     };
   }
@@ -1602,7 +1602,7 @@ export class TimelineView {
     return clamp(metrics.axisCoordinate + side * offset, 18, metrics.width - 18);
   }
 
-  showMeasurementLine({ persistent = false, fadeOutMs = 3000 } = {}) {
+  showMeasurementLine({ persistent = false, fadeOutMs = 1200 } = {}) {
     if (!this.measurementLine) return;
     const wasHidden = this.measurementLine.hidden;
     this.measurementLine.hidden = false;

@@ -157,7 +157,7 @@ createHistuiTimeline({
       measurement: {
         enabled: true,
         transient: true,
-        fadeOutMs: 3000
+        fadeOutMs: 1200
       },
       explode: {
         maxVisible: 42,
@@ -169,7 +169,7 @@ createHistuiTimeline({
 });
 ```
 
-`timeline.measurement.enabled` draws a dimension-style line across the currently visible timeline span and labels it with the visible year count. Set `timeline.measurement.transient` to `true` to show it only after the viewport changes; it fades out after `fadeOutMs` milliseconds, defaulting to `3000`.
+`timeline.measurement.enabled` draws a dimension-style line across the currently visible timeline span and labels it with the visible year count. Set `timeline.measurement.transient` to `true` to show it only after the viewport changes; it fades out after `fadeOutMs` milliseconds, defaulting to `1200`.
 
 ## Check
 
