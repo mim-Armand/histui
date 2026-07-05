@@ -66,6 +66,22 @@
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
+.histui-timeline.is-broadcast-mode {
+  background: transparent;
+}
+
+.histui-timeline.is-broadcast-mode .histui-timeline-workbench {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--grid) 18%, transparent) 1px, transparent 1px),
+    linear-gradient(0deg, color-mix(in srgb, var(--grid) 14%, transparent) 1px, transparent 1px),
+    color-mix(in srgb, var(--background) 58%, transparent);
+  background-size: 52px 52px;
+}
+
+.histui-timeline.is-broadcast-mode.has-hidden-controls .histui-timeline-workbench {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
 .histui-timeline-head {
   display: flex;
   align-items: center;
@@ -449,6 +465,35 @@
 .event-card.is-exploded .card-meta > span,
 .event-card.is-exploded .card-chip {
   padding: 1px 5px;
+}
+
+.histui-timeline.is-broadcast-mode .event-card {
+  width: 320px;
+  max-width: min(320px, calc(100vw - 42px));
+  max-height: 214px;
+  border-color: color-mix(in srgb, var(--record-color) 68%, var(--text));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-raised) 88%, var(--record-color) 12%), color-mix(in srgb, var(--surface) 92%, transparent));
+  box-shadow:
+    0 22px 52px color-mix(in srgb, var(--shadow) 92%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--record-color) 24%, transparent);
+}
+
+.histui-timeline.is-broadcast-mode .event-card.mode-short {
+  width: 246px;
+  max-height: 146px;
+}
+
+.histui-timeline.is-broadcast-mode .event-card.mode-icon {
+  width: 188px;
+}
+
+.histui-timeline.is-broadcast-mode .card-title {
+  font-size: 15px;
+}
+
+.histui-timeline.is-broadcast-mode .event-card p {
+  font-size: 13px;
 }
 
 .card-date {

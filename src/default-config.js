@@ -4,6 +4,7 @@ export const DEFAULT_HISTUI_CONFIG = {
     defaultLanguage: "en",
     languages: ["en", "fa"],
     defaultTheme: "obsidian-lab",
+    displayMode: "standard",
     orientation: "auto",
     axisPlacement: {
       horizontal: "center",

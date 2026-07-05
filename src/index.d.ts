@@ -1,5 +1,6 @@
 export type HistuiOrientation = "auto" | "horizontal" | "vertical";
 export type HistuiAxisPlacement = "center" | "side-start" | "side-end";
+export type HistuiDisplayMode = "standard" | "broadcast";
 
 export interface HistuiTheme {
   id: string;
@@ -31,6 +32,7 @@ export interface HistuiConfig {
     defaultLanguage?: string;
     languages?: string[];
     defaultTheme?: string;
+    displayMode?: HistuiDisplayMode;
     orientation?: HistuiOrientation;
     axisPlacement?: {
       horizontal?: HistuiAxisPlacement;
@@ -83,6 +85,7 @@ export interface HistuiTimelineOptions<RecordType = any> {
   theme?: HistuiTheme;
   title?: string;
   description?: string;
+  displayMode?: HistuiDisplayMode;
   controls?: boolean;
   replace?: boolean;
   selectInitial?: boolean;
@@ -116,6 +119,7 @@ export interface HistuiState<RecordType = any> {
   language: string;
   direction: string;
   themeId: string;
+  displayMode: HistuiDisplayMode;
   orientation: HistuiOrientation;
   axisPlacement: {
     horizontal: HistuiAxisPlacement;
@@ -142,6 +146,8 @@ export class HistuiTimeline<RecordType = any> {
   setExplodeEnabled(enabled: boolean): this;
   setMeasurementOptions(options: HistuiMeasurementConfig): this;
   setMeasurementEnabled(enabled: boolean): this;
+  setDisplayMode(displayMode: HistuiDisplayMode): this;
+  setBroadcastMode(enabled: boolean): this;
   setLanguage(language: string, direction?: "ltr" | "rtl"): this;
   setTheme(themeOrId: string | HistuiTheme): this;
   applyTheme(theme: HistuiTheme): void;

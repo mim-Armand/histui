@@ -1,6 +1,6 @@
 # Histui
 
-Histui is a reusable, framework-agnostic interactive history timeline package. It can render PastStruct datasets or already-normalized records into a zoomable, pannable, responsive timeline with LOD, clustering, a zoom navigator, hover-linked connectors, blueprint-style measurement indicators, axis placement controls, themes, Persian/English UI strings, and explode mode.
+Histui is a reusable, framework-agnostic interactive history timeline package. It can render PastStruct datasets or already-normalized records into a zoomable, pannable, responsive timeline with LOD, clustering, a zoom navigator, hover-linked connectors, blueprint-style measurement indicators, axis placement controls, themes, broadcast display mode, Persian/English UI strings, and explode mode.
 
 ## Files
 
@@ -30,6 +30,7 @@ const histui = createHistuiTimeline({
   data: pastStructDataset,
   language: "en",
   themeId: "obsidian-lab",
+  displayMode: "standard",
   explodeEnabled: false,
   onSelect(record) {
     console.log("selected", record.id);
@@ -90,6 +91,7 @@ Common options:
 - `language`: default `"en"`.
 - `direction`: optional text direction override.
 - `themeId` or `theme`: built-in theme id or custom theme object.
+- `displayMode`: `"standard"` or `"broadcast"`. Broadcast mode increases legibility and uses overlay-friendly timeline styling.
 - `controls`: render built-in timeline controls. Default `true`.
 - `replace`: clear the container before mounting. Default `true`.
 - `filters`: initial filter object.
@@ -120,6 +122,8 @@ Common options:
 - `setExplodeEnabled(enabled)`
 - `setMeasurementOptions(options)`
 - `setMeasurementEnabled(enabled)`
+- `setDisplayMode("standard" | "broadcast")`
+- `setBroadcastMode(enabled)`
 - `setLanguage(language, direction)`
 - `setTheme(themeOrId)`
 - `getState()`

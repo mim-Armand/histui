@@ -43,6 +43,7 @@ export class HistuiTimeline {
     this.direction = options.direction || dirForLanguage(this.language);
     this.t = options.translator || makeTranslator(this.language);
     this.themeId = options.themeId || this.config.app.defaultTheme;
+    this.displayMode = normalizeDisplayMode(options.displayMode || this.config.app.displayMode);
     this.orientation = options.orientation || this.config.app.orientation || "auto";
     this.axisPlacement = {
       horizontal: options.axisPlacement?.horizontal || this.config.app.axisPlacement?.horizontal || "center",
@@ -77,6 +78,7 @@ export class HistuiTimeline {
     this.root.className = "histui-timeline";
     this.root.lang = this.language;
     this.root.dir = this.direction;
+    this.applyDisplayMode(this.displayMode);
     this.root.innerHTML = `
       <section class="histui-timeline-workbench">
         <header class="histui-timeline-head" data-histui-head></header>
@@ -269,6 +271,27 @@ export class HistuiTimeline {
     return this;
   }
 
+  setDisplayMode(displayMode) {
+    const nextMode = normalizeDisplayMode(displayMode);
+    if (nextMode === this.displayMode) return this;
+    this.displayMode = nextMode;
+    this.applyDisplayMode(nextMode);
+    this.timeline.render();
+    this.track("timeline_setting_change", { setting: "display-mode", value: nextMode });
+    return this;
+  }
+
+  setBroadcastMode(enabled) {
+    return this.setDisplayMode(enabled ? "broadcast" : "standard");
+  }
+
+  applyDisplayMode(displayMode) {
+    if (!this.root) return;
+    const mode = normalizeDisplayMode(displayMode);
+    this.root.dataset.displayMode = mode;
+    this.root.classList.toggle("is-broadcast-mode", mode === "broadcast");
+  }
+
   applyTheme(theme) {
     applyTheme(theme, this.root);
   }
@@ -285,6 +308,7 @@ export class HistuiTimeline {
       language: this.language,
       direction: this.direction,
       themeId: this.themeId,
+      displayMode: this.displayMode,
       orientation: this.orientation,
       axisPlacement: { ...this.axisPlacement },
       lodEnabled: this.lodEnabled,
@@ -457,6 +481,10 @@ function resolveContainer(container) {
   const element = document.querySelector(container);
   if (!element) throw new Error(`Histui container not found: ${container}`);
   return element;
+}
+
+function normalizeDisplayMode(displayMode) {
+  return displayMode === "broadcast" ? "broadcast" : "standard";
 }
 
 function mergeConfig(base, override) {
