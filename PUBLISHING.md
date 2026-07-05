@@ -1,12 +1,11 @@
 # Publishing Histui
 
-Use this checklist when publishing the `histui` package to npm.
+Use this checklist when publishing the `@mim/histui` package to npm.
 
 ## Before Publishing
 
-1. Make sure the package name in `package.json` is the intended npm name.
-   - If `histui` is unavailable, switch to a scoped name such as `@your-scope/histui`.
-   - For scoped public packages, keep or add:
+1. Make sure the package name in `package.json` is `@mim/histui`.
+   For scoped public packages, keep:
 
    ```json
    {
@@ -49,36 +48,28 @@ Use this checklist when publishing the `histui` package to npm.
 2. Publish:
 
    ```bash
-   npm publish
-   ```
-
-   For a scoped package:
-
-   ```bash
    npm publish --access public
    ```
 
 3. Verify the published package:
 
    ```bash
-   npm view histui
+   npm view @mim/histui
    ```
-
-   Replace `histui` with the scoped package name if needed.
 
 ## After Publishing
 
 1. Install the published package in a clean test project:
 
    ```bash
-   npm install histui
+   npm install @mim/histui
    ```
 
 2. Import the JavaScript and CSS:
 
    ```js
-   import { createHistuiTimeline } from "histui";
-   import "histui/styles.css";
+   import { createHistuiTimeline } from "@mim/histui";
+   import "@mim/histui/styles.css";
    ```
 
 3. Smoke-test a small PastStruct dataset and confirm:

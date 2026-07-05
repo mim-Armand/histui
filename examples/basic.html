@@ -70,6 +70,11 @@
       createHistuiTimeline({
         container: "#timeline",
         data,
+        measurement: {
+          enabled: true,
+          transient: true,
+          fadeOutMs: 3000
+        },
         explodeEnabled: true,
         onSelect(record) {
           console.log("Selected", record.id);
@@ -78,4 +83,3 @@
     </script>
   </body>
 </html>
-

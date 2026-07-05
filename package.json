@@ -1,6 +1,9 @@
 {
-  "name": "histui",
-  "version": "0.1.0",
+  "name": "@mim/histui",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.2.0",
   "description": "Reusable Histui interactive timeline package for PastStruct and normalized historical records.",
   "type": "module",
   "main": "./src/index.js",

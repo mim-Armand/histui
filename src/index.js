@@ -35,6 +35,10 @@ export class HistuiTimeline {
       ...options
     };
     this.config = mergeConfig(DEFAULT_HISTUI_CONFIG, options.config || {});
+    if (options.measurement) {
+      this.config.timeline = this.config.timeline || {};
+      this.config.timeline.measurement = mergeConfig(this.config.timeline.measurement || {}, options.measurement);
+    }
     this.language = options.language || this.config.app.defaultLanguage || "en";
     this.direction = options.direction || dirForLanguage(this.language);
     this.t = options.translator || makeTranslator(this.language);
@@ -232,6 +236,18 @@ export class HistuiTimeline {
     return this;
   }
 
+  setMeasurementOptions(options = {}) {
+    this.config.timeline = this.config.timeline || {};
+    this.config.timeline.measurement = mergeConfig(this.config.timeline.measurement || {}, options);
+    this.timeline.setMeasurementOptions(this.config.timeline.measurement);
+    this.track("timeline_setting_change", { setting: "measurement", value: { ...this.config.timeline.measurement } });
+    return this;
+  }
+
+  setMeasurementEnabled(enabled) {
+    return this.setMeasurementOptions({ enabled: Boolean(enabled) });
+  }
+
   setLanguage(language, direction = dirForLanguage(language)) {
     this.language = language;
     this.direction = direction;
@@ -272,7 +288,8 @@ export class HistuiTimeline {
       orientation: this.orientation,
       axisPlacement: { ...this.axisPlacement },
       lodEnabled: this.lodEnabled,
-      explodeEnabled: this.explodeEnabled
+      explodeEnabled: this.explodeEnabled,
+      measurement: { ...(this.config.timeline?.measurement || {}) }
     };
   }
 

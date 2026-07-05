@@ -1,6 +1,6 @@
 # Histui
 
-Histui is a reusable, framework-agnostic interactive history timeline package. It can render PastStruct datasets or already-normalized records into a zoomable, pannable, responsive timeline with LOD, clustering, a zoom navigator, hover-linked connectors, axis placement controls, themes, Persian/English UI strings, and explode mode.
+Histui is a reusable, framework-agnostic interactive history timeline package. It can render PastStruct datasets or already-normalized records into a zoomable, pannable, responsive timeline with LOD, clustering, a zoom navigator, hover-linked connectors, blueprint-style measurement indicators, axis placement controls, themes, Persian/English UI strings, and explode mode.
 
 ## Files
 
@@ -13,29 +13,34 @@ Histui is a reusable, framework-agnostic interactive history timeline package. I
 
 ## Basic Usage
 
-```html
-<link rel="stylesheet" href="/path/to/histui/src/styles.css">
-<div id="timeline" style="height: 720px"></div>
-<script type="module">
-  import { createHistuiTimeline } from "/path/to/histui/src/index.js";
+Install the package from npm:
 
-  const histui = createHistuiTimeline({
-    container: "#timeline",
-    data: pastStructDataset,
-    language: "en",
-    themeId: "obsidian-lab",
-    explodeEnabled: false,
-    onSelect(record) {
-      console.log("selected", record.id);
-    },
-    onViewportChange(viewport) {
-      console.log(viewport);
-    }
-  });
+```bash
+npm install @mim/histui
+```
 
-  histui.setExplodeEnabled(true);
-  histui.setFilters({ minSignificance: 7 });
-</script>
+Import the JavaScript API and required stylesheet:
+
+```js
+import { createHistuiTimeline } from "@mim/histui";
+import "@mim/histui/styles.css";
+
+const histui = createHistuiTimeline({
+  container: "#timeline",
+  data: pastStructDataset,
+  language: "en",
+  themeId: "obsidian-lab",
+  explodeEnabled: false,
+  onSelect(record) {
+    console.log("selected", record.id);
+  },
+  onViewportChange(viewport) {
+    console.log(viewport);
+  }
+});
+
+histui.setExplodeEnabled(true);
+histui.setFilters({ minSignificance: 7 });
 ```
 
 ## Local Development
@@ -56,7 +61,7 @@ Use a custom port when needed:
 PORT=5180 npm run dev
 ```
 
-Keep this server running while editing package files. For testing the package inside `histui-app-2`, keep the app pointed at the local file dependency (`"histui": "file:../histui"`), run the app dev server in that repo, and reinstall there only after changing package metadata or dependency wiring.
+Keep this server running while editing package files. For testing the package inside `histui-app-2`, run `npm run histui:local` in the app repo to point `@mim/histui` at `../histui`, then run `npm run histui:published` when you want to switch the app back to the published package.
 
 ## Public API
 
@@ -69,7 +74,7 @@ import {
   createDefaultFilters,
   filterRecords,
   DEFAULT_HISTUI_CONFIG
-} from "histui";
+} from "@mim/histui";
 ```
 
 ### `createHistuiTimeline(options)`
@@ -92,6 +97,7 @@ Common options:
 - `axisPlacement`: `{ horizontal, vertical }`, each `"center"`, `"side-start"`, or `"side-end"`.
 - `lodEnabled`: boolean.
 - `explodeEnabled`: boolean.
+- `measurement`: optional override for `config.timeline.measurement`.
 - `analytics.measurementId`: optional Google Analytics measurement id.
 - `onSelect(record, instance)`: event callback.
 - `onViewportChange(viewport, instance)`: event callback.
@@ -112,6 +118,8 @@ Common options:
 - `setAxisPlacement(orientation, placement)`
 - `setLodEnabled(enabled)`
 - `setExplodeEnabled(enabled)`
+- `setMeasurementOptions(options)`
+- `setMeasurementEnabled(enabled)`
 - `setLanguage(language, direction)`
 - `setTheme(themeOrId)`
 - `getState()`
@@ -146,6 +154,11 @@ createHistuiTimeline({
   data,
   config: {
     timeline: {
+      measurement: {
+        enabled: true,
+        transient: true,
+        fadeOutMs: 3000
+      },
       explode: {
         maxVisible: 42,
         layers: 8,
@@ -155,6 +168,8 @@ createHistuiTimeline({
   }
 });
 ```
+
+`timeline.measurement.enabled` draws a dimension-style line across the currently visible timeline span and labels it with the visible year count. Set `timeline.measurement.transient` to `true` to show it only after the viewport changes; it fades out after `fadeOutMs` milliseconds, defaulting to `3000`.
 
 ## Check
 

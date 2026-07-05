@@ -29,6 +29,11 @@ export const DEFAULT_HISTUI_CONFIG = {
       trackInsetPx: 18,
       minSelectionPixels: 10
     },
+    measurement: {
+      enabled: false,
+      transient: false,
+      fadeOutMs: 3000
+    },
     lod: {
       enabled: true,
       thresholds: [
@@ -117,4 +122,3 @@ export const DEFAULT_HISTUI_CONFIG = {
     }
   ]
 };
-

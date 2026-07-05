@@ -64,6 +64,9 @@ export class TimelineView {
     this.viewportAnimation = null;
     this.motionTimer = 0;
     this.explodeAnimationTimer = 0;
+    this.measurementFadeTimer = 0;
+    this.lastMeasurementKey = "";
+    this.suppressMeasurementChange = false;
     this.lastFrame = 0;
     this.lastMetrics = null;
     this.lastItems = { all: [], display: [], hidden: [] };
@@ -73,6 +76,7 @@ export class TimelineView {
     this.clusterTooltip.className = "cluster-tooltip";
     this.clusterTooltip.hidden = true;
     this.stage.append(this.clusterTooltip);
+    this.setupMeasurementLine();
     this.stage.classList.toggle("is-explode-mode", this.explodeEnabled);
     this.setupZoomBar();
 
@@ -177,6 +181,22 @@ export class TimelineView {
     this.zoomBar.addEventListener("keydown", (event) => this.handleZoomKeydown(event));
   }
 
+  setupMeasurementLine() {
+    this.measurementLine = document.createElement("div");
+    this.measurementLine.className = "histui-measurement-line";
+    this.measurementLine.hidden = true;
+    this.measurementLine.setAttribute("aria-hidden", "true");
+    this.measurementLine.innerHTML = `
+      <span class="histui-measurement-rule" aria-hidden="true">
+        <span class="histui-measurement-arrow histui-measurement-arrow-start"></span>
+        <span class="histui-measurement-arrow histui-measurement-arrow-end"></span>
+      </span>
+      <span class="histui-measurement-label"></span>
+    `;
+    this.measurementLabel = this.measurementLine.querySelector(".histui-measurement-label");
+    this.stage.append(this.measurementLine);
+  }
+
   setTranslator(t) {
     this.t = t;
     if (this.zoomBar) {
@@ -231,7 +251,19 @@ export class TimelineView {
     this.render();
   }
 
+  setMeasurementOptions(options = {}) {
+    this.config.timeline = this.config.timeline || {};
+    this.config.timeline.measurement = {
+      ...(this.config.timeline.measurement || {}),
+      ...options
+    };
+    this.lastMeasurementKey = "";
+    if (!this.getMeasurementConfig().enabled) this.hideMeasurementLine({ immediate: true });
+    this.render();
+  }
+
   setRecords(records, { resetView = false } = {}) {
+    this.suppressMeasurementChange = true;
     this.records = records;
     this.idMap = new Map(records.map((record) => [record.id, record]));
     this.hoveredClusterId = null;
@@ -860,6 +892,7 @@ export class TimelineView {
     this.drawClusters(metrics, colors, items.hidden);
     this.renderClusterTooltip(metrics);
     this.renderZoomBar(colors);
+    this.renderMeasurementLine(metrics);
     if (renderCards) this.renderCards(metrics, items.display);
     else this.updateCardHighlightClasses();
     this.renderHint(metrics, items);
@@ -1486,6 +1519,112 @@ export class TimelineView {
     this.clusterTooltip.hidden = false;
   }
 
+  renderMeasurementLine(metrics) {
+    if (!this.measurementLine || !this.measurementLabel) return;
+    const measurement = this.getMeasurementConfig();
+    this.stage.classList.toggle("has-measurement-line", measurement.enabled);
+
+    if (!measurement.enabled || metrics.axisLength < 80) {
+      this.hideMeasurementLine({ immediate: true });
+      return;
+    }
+
+    const span = Math.max(1, Math.round(this.view.end - this.view.start));
+    this.measurementLabel.textContent = this.t("zoomLevel", { span });
+    this.measurementLine.dataset.orientation = metrics.orientation;
+    this.measurementLine.hidden = false;
+
+    if (metrics.orientation === "horizontal") {
+      const y = this.measurementCoordinate(metrics, measurement);
+      this.measurementLine.style.left = `${metrics.axisStart}px`;
+      this.measurementLine.style.top = `${y - 16}px`;
+      this.measurementLine.style.width = `${metrics.axisLength}px`;
+      this.measurementLine.style.height = "32px";
+    } else {
+      const x = this.measurementCoordinate(metrics, measurement);
+      this.measurementLine.style.left = `${x - 16}px`;
+      this.measurementLine.style.top = `${metrics.axisStart}px`;
+      this.measurementLine.style.width = "32px";
+      this.measurementLine.style.height = `${metrics.axisLength}px`;
+    }
+
+    if (!measurement.transient) {
+      this.showMeasurementLine({ persistent: true });
+      return;
+    }
+
+    const key = [
+      metrics.orientation,
+      Math.round(this.view.start * 1000) / 1000,
+      Math.round(this.view.end * 1000) / 1000,
+      metrics.axisLength
+    ].join(":");
+
+    if (!this.lastMeasurementKey || this.suppressMeasurementChange) {
+      this.lastMeasurementKey = key;
+      this.suppressMeasurementChange = false;
+      this.hideMeasurementLine();
+      return;
+    }
+
+    if (key !== this.lastMeasurementKey) {
+      this.lastMeasurementKey = key;
+      this.showMeasurementLine({ fadeOutMs: measurement.fadeOutMs });
+    }
+  }
+
+  getMeasurementConfig() {
+    const measurement = this.config.timeline?.measurement || {};
+    const fadeOutMs = Number(measurement.fadeOutMs ?? measurement.hideAfterMs ?? 3000);
+    return {
+      enabled: measurement.enabled === true,
+      transient: measurement.transient === true ||
+        measurement.showOnChangeOnly === true ||
+        measurement.visibleOnChangeOnly === true,
+      fadeOutMs: Number.isFinite(fadeOutMs) ? Math.max(0, fadeOutMs) : 3000,
+      offsetPx: Number.isFinite(Number(measurement.offsetPx)) ? Number(measurement.offsetPx) : null
+    };
+  }
+
+  measurementCoordinate(metrics, measurement) {
+    const offset = clamp(measurement.offsetPx ?? 32, 20, 110);
+    if (metrics.orientation === "horizontal") {
+      if (metrics.placement === "side-start") return clamp(metrics.axisCoordinate + offset, 18, metrics.height - 18);
+      if (metrics.placement === "side-end") return clamp(metrics.axisCoordinate - offset, 18, metrics.height - 18);
+      return clamp(offset, 18, metrics.height - 18);
+    }
+
+    if (metrics.placement === "center") {
+      return clamp(this.direction === "rtl" ? metrics.width - offset : offset, 18, metrics.width - 18);
+    }
+
+    const side = metrics.axisCoordinate < metrics.width / 2 ? 1 : -1;
+    return clamp(metrics.axisCoordinate + side * offset, 18, metrics.width - 18);
+  }
+
+  showMeasurementLine({ persistent = false, fadeOutMs = 3000 } = {}) {
+    if (!this.measurementLine) return;
+    const wasHidden = this.measurementLine.hidden;
+    this.measurementLine.hidden = false;
+    if (wasHidden) void this.measurementLine.offsetWidth;
+    this.measurementLine.classList.add("is-visible");
+    if (this.measurementFadeTimer) window.clearTimeout(this.measurementFadeTimer);
+    this.measurementFadeTimer = 0;
+    if (persistent) return;
+    this.measurementFadeTimer = window.setTimeout(() => {
+      this.measurementFadeTimer = 0;
+      this.hideMeasurementLine();
+    }, fadeOutMs);
+  }
+
+  hideMeasurementLine({ immediate = false } = {}) {
+    if (!this.measurementLine) return;
+    if (this.measurementFadeTimer) window.clearTimeout(this.measurementFadeTimer);
+    this.measurementFadeTimer = 0;
+    this.measurementLine.classList.remove("is-visible");
+    if (immediate) this.measurementLine.hidden = true;
+  }
+
   renderCards(metrics, displayItems) {
     const axis = metrics.axisCoordinate;
     const mode = this.getLod(this.view.end - this.view.start).labelMode;
@@ -1835,11 +1974,14 @@ export class TimelineView {
     if (this.viewportAnimationFrame) cancelAnimationFrame(this.viewportAnimationFrame);
     if (this.motionTimer) window.clearTimeout(this.motionTimer);
     if (this.explodeAnimationTimer) window.clearTimeout(this.explodeAnimationTimer);
+    if (this.measurementFadeTimer) window.clearTimeout(this.measurementFadeTimer);
     this.clusterTooltip?.remove();
+    this.measurementLine?.remove();
     this.animationFrame = 0;
     this.viewportAnimationFrame = 0;
     this.motionTimer = 0;
     this.explodeAnimationTimer = 0;
+    this.measurementFadeTimer = 0;
   }
 }
 

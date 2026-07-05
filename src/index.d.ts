@@ -7,6 +7,24 @@ export interface HistuiTheme {
   colors: Record<string, string>;
 }
 
+export interface HistuiMeasurementConfig {
+  enabled?: boolean;
+  transient?: boolean;
+  showOnChangeOnly?: boolean;
+  visibleOnChangeOnly?: boolean;
+  fadeOutMs?: number;
+  hideAfterMs?: number;
+  offsetPx?: number;
+}
+
+export interface HistuiTimelineConfig {
+  minZoomSpanYears?: number;
+  maxZoomMultiplier?: number;
+  defaultPaddingRatio?: number;
+  measurement?: HistuiMeasurementConfig;
+  [key: string]: unknown;
+}
+
 export interface HistuiConfig {
   app?: {
     name?: string;
@@ -22,7 +40,7 @@ export interface HistuiConfig {
   analytics?: {
     googleAnalyticsMeasurementId?: string;
   };
-  timeline?: Record<string, unknown>;
+  timeline?: HistuiTimelineConfig;
   themes?: HistuiTheme[];
 }
 
@@ -77,6 +95,7 @@ export interface HistuiTimelineOptions<RecordType = any> {
   };
   lodEnabled?: boolean;
   explodeEnabled?: boolean;
+  measurement?: HistuiMeasurementConfig;
   analytics?: {
     measurementId?: string;
   };
@@ -104,6 +123,7 @@ export interface HistuiState<RecordType = any> {
   };
   lodEnabled: boolean;
   explodeEnabled: boolean;
+  measurement: HistuiMeasurementConfig;
 }
 
 export class HistuiTimeline<RecordType = any> {
@@ -120,6 +140,8 @@ export class HistuiTimeline<RecordType = any> {
   setAxisPlacement(orientation: "horizontal" | "vertical", placement: HistuiAxisPlacement): this;
   setLodEnabled(enabled: boolean): this;
   setExplodeEnabled(enabled: boolean): this;
+  setMeasurementOptions(options: HistuiMeasurementConfig): this;
+  setMeasurementEnabled(enabled: boolean): this;
   setLanguage(language: string, direction?: "ltr" | "rtl"): this;
   setTheme(themeOrId: string | HistuiTheme): this;
   applyTheme(theme: HistuiTheme): void;
@@ -134,4 +156,3 @@ export function createDefaultFilters(records: any[], facets?: unknown): HistuiFi
 export function filterRecords<RecordType = any>(records: RecordType[], filters: HistuiFilters): RecordType[];
 export function normalizeFilters(filters?: HistuiFilters, baseFilters?: HistuiFilters): HistuiFilters;
 export const DEFAULT_HISTUI_CONFIG: HistuiConfig;
-
