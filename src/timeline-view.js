@@ -1595,7 +1595,8 @@ export class TimelineView {
     }
 
     if (metrics.placement === "center") {
-      return clamp(this.direction === "rtl" ? metrics.width - offset : offset, 18, metrics.width - 18);
+      const side = this.direction === "rtl" ? -1 : 1;
+      return clamp(metrics.axisCoordinate + side * offset, 18, metrics.width - 18);
     }
 
     const side = metrics.axisCoordinate < metrics.width / 2 ? 1 : -1;
