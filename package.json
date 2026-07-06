@@ -3,7 +3,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Reusable Histui interactive timeline package for PastStruct and normalized historical records.",
   "type": "module",
   "main": "./src/index.js",
