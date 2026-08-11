@@ -638,23 +638,25 @@
   pointer-events: none;
 }
 
-.histui-break-mark {
+/* Deliberately quiet: the mark is a footnote about missing time, not a record. It only
+   gains a border, a solid background and full contrast while hovered or focused.
+   Scoped through the layer so the `.histui-timeline button` font/color reset, which is
+   more specific than a lone class, does not drag the chip back to body text. */
+.histui-break-marks .histui-break-mark {
   position: absolute;
   left: var(--x);
   top: var(--y);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border: 1px solid color-mix(in srgb, var(--accent4) 48%, var(--line));
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-raised) 90%, var(--accent4) 10%);
-  box-shadow:
-    0 8px 18px color-mix(in srgb, var(--shadow) 58%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
-  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-raised) 55%, transparent);
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
   font-family: var(--mono-font);
   font-size: 10px;
+  letter-spacing: 0.02em;
   line-height: 1;
   pointer-events: auto;
   cursor: pointer;
@@ -666,25 +668,31 @@
   white-space: nowrap;
 }
 
-.histui-break-mark.is-expanded {
+.histui-break-marks .histui-break-mark.is-bare {
+  padding: 2px 4px;
+}
+
+.histui-break-marks .histui-break-mark.is-expanded {
   border-style: dashed;
 }
 
-.histui-break-mark:hover,
-.histui-break-mark:focus-visible,
-.histui-break-mark.is-hovered {
+.histui-break-marks .histui-break-mark:hover,
+.histui-break-marks .histui-break-mark:focus-visible,
+.histui-break-marks .histui-break-mark.is-hovered {
   border-color: var(--accent2);
   outline: none;
-  background: color-mix(in srgb, var(--surface-raised) 84%, var(--accent2) 16%);
+  background: color-mix(in srgb, var(--surface-raised) 92%, var(--accent2) 8%);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--shadow) 45%, transparent);
   color: var(--accent2);
 }
 
 .histui-break-glyph {
-  color: var(--accent4);
-  font-size: 12px;
+  color: color-mix(in srgb, var(--accent4) 62%, transparent);
+  font-size: 11px;
 }
 
 .histui-break-mark:hover .histui-break-glyph,
+.histui-break-mark:focus-visible .histui-break-glyph,
 .histui-break-mark.is-hovered .histui-break-glyph {
   color: var(--accent2);
 }

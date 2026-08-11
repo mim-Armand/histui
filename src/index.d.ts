@@ -18,8 +18,11 @@ export interface HistuiMeasurementConfig {
   offsetPx?: number;
 }
 
+export type HistuiTimeBreakLabel = "gap" | "removed" | "both" | "range" | "none";
+
 export interface HistuiTimeBreakConfig {
   enabled?: boolean;
+  label?: HistuiTimeBreakLabel;
   minGapRatio?: number;
   minGapYears?: number;
   collapsedRatio?: number;
@@ -188,14 +191,27 @@ export interface HistuiTimeScaleSegment {
   startYear: number;
   endYear: number;
   yearSpan: number;
+  /** Start of the empty stretch the segment stands for, before context is kept back. */
+  gapStartYear: number;
+  gapEndYear: number;
+  gapYears: number;
   startUnit: number;
   endUnit: number;
   unitSpan: number;
   scale: number;
 }
 
+export interface HistuiTimeBreakEntry {
+  id?: string;
+  startYear: number;
+  endYear: number;
+  unitSpan: number;
+  gapStartYear?: number;
+  gapEndYear?: number;
+}
+
 export class TimeScale {
-  constructor(domain: { start: number; end: number }, breaks?: Array<{ startYear: number; endYear: number; unitSpan: number }>);
+  constructor(domain: { start: number; end: number }, breaks?: HistuiTimeBreakEntry[]);
   static identity(domain: { start: number; end: number }): TimeScale;
   readonly domain: { start: number; end: number };
   readonly segments: HistuiTimeScaleSegment[];
@@ -218,6 +234,7 @@ export function buildTimeScale(
 ): TimeScale;
 export function normalizeTimeBreakOptions(options?: HistuiTimeBreakConfig): Required<HistuiTimeBreakConfig>;
 export const DEFAULT_TIME_BREAK_OPTIONS: Required<HistuiTimeBreakConfig>;
+export const TIME_BREAK_LABELS: HistuiTimeBreakLabel[];
 
 export function createHistuiTimeline<RecordType = any>(options: HistuiTimelineOptions<RecordType>): HistuiTimeline<RecordType>;
 export function normalizeTimelineData(data: unknown, datasetConfig?: Record<string, unknown>): unknown;

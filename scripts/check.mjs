@@ -4,10 +4,12 @@ import { readFile } from "node:fs/promises";
 
 import {
   DEFAULT_HISTUI_CONFIG,
+  TIME_BREAK_LABELS,
   TimeScale,
   buildTimeScale,
   createDefaultFilters,
   filterRecords,
+  normalizeTimeBreakOptions,
   normalizeTimelineData
 } from "../src/index.js";
 
@@ -104,6 +106,20 @@ assert.equal(
   zoomedOut.breaks[0].id,
   "break ids follow the gap so expanded gaps survive a zoom change"
 );
+
+const [wideBreak] = zoomedOut.breaks;
+assert.equal(wideBreak.gapStartYear, 80, "a break remembers where the empty stretch really starts");
+assert.equal(wideBreak.gapEndYear, 3000);
+assert.ok(
+  wideBreak.gapYears > wideBreak.yearSpan,
+  "the collapsed segment is shorter than the gap because context is kept on both sides"
+);
+
+assert.equal(normalizeTimeBreakOptions({}).label, "gap");
+assert.equal(normalizeTimeBreakOptions({ label: "both" }).label, "both");
+assert.equal(normalizeTimeBreakOptions({ label: "nonsense" }).label, "gap", "an unknown label falls back");
+assert.deepEqual(TIME_BREAK_LABELS, ["gap", "removed", "both", "range", "none"]);
+assert.equal(DEFAULT_HISTUI_CONFIG.timeline.timeBreaks.label, "gap");
 
 const devServerSyntax = spawnSync(process.execPath, ["--check", "scripts/dev-server.mjs"], {
   cwd: new URL("..", import.meta.url),

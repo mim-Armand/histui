@@ -53,7 +53,7 @@ Run the package directly from this repository when you want to develop `histui` 
 npm run dev
 ```
 
-Open [http://127.0.0.1:5175](http://127.0.0.1:5175). The dev server serves `examples/basic.html`, which imports `../src/index.js` and `../src/styles.css`, so it always uses the local package source instead of a published build.
+Open [http://127.0.0.1:5175](http://127.0.0.1:5175). The dev server serves `examples/basic.html`, which imports `../src/index.js` and `../src/styles.css`, so it always uses the local package source instead of a published build. Its dataset leaves two long empty stretches, and a strip above the timeline picks the [break label](#time-breaks) so every mode can be compared against the built-in `Skip empty time` toggle.
 
 Changes in `src/`, `examples/`, `README.md`, `PUBLISHING.md`, or `package.json` trigger an automatic browser reload. The server disables caching so style and JavaScript edits show up on the next reload without extra build steps.
 
@@ -194,10 +194,22 @@ const histui = createHistuiTimeline({
 });
 
 histui.setTimeBreaksEnabled(false);
-histui.setTimeBreakOptions({ minGapRatio: 0.1, collapsedRatio: 0.01 });
+histui.setTimeBreakOptions({ minGapRatio: 0.1, collapsedRatio: 0.01, label: "range" });
 ```
 
-The built-in controls include a `Skip empty time` toggle. Each collapsed gap is drawn as a hatched band with zigzag edges and a chip labelled with the number of skipped years (for example `2.2K yr empty`). Hovering a chip shows the exact gap and the years on both sides; clicking it expands that one gap back to real scale, and clicking again collapses it. Expanded gaps stay expanded until the toggle, the dataset, or the options change.
+The built-in controls include a `Skip empty time` toggle. Each collapsed gap is drawn as a hatched band with zigzag edges and a small muted chip. Hovering a chip shows the full picture — the empty span, the years on both sides, and how much the axis dropped — and brings the chip itself to full contrast; clicking it expands that one gap back to real scale, and clicking again collapses it. Expanded gaps stay expanded until the toggle, the dataset, or the cut itself changes; changing only the chip text leaves them open.
+
+`label` chooses what a chip says, and defaults to `"gap"`. Unknown values fall back to that default, and the hover tooltip carries every number regardless, so `"none"` loses no information.
+
+| `label` | Chip | Reads |
+| --- | --- | --- |
+| `"gap"` | `2,220 yr gap` | Time between the records on either side: from where the earlier one ends to where the later one starts. |
+| `"removed"` | `~2,186 yr` | Time taken off the axis, which is a little shorter because a break keeps some context and the collapsed band still occupies a sliver. |
+| `"both"` | `~2,186 of 2,220 yr` | Both. |
+| `"range"` | `321 BCE - 1900 CE` | Where the cut sits, rather than how long it is. |
+| `"none"` | `⌇` | Only the glyph. |
+
+Chips spell the years out, because compact notation would round `gap` and `removed` to the same figure; only spans past 100,000 years, which means deep time rather than history, fall back to a compact form.
 
 Breaks follow the zoom. Whether a gap feels long depends on how much of the frame it takes, not on how many years it holds: 300 empty years are invisible across a millennium and half the screen across a century. Every threshold is therefore a fraction of the visible span, and the axis is re-cut whenever the zoom changes by more than `zoomSyncRatio`, so zooming in keeps cutting the newly dominant gaps instead of reopening the empty runs. Panning never re-cuts anything.
 
@@ -206,6 +218,7 @@ Behaviour is tuned through `config.timeline.timeBreaks`:
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `false` | Collapse empty time by default. |
+| `label` | `"gap"` | What each chip reports: `"gap"`, `"removed"`, `"both"`, `"range"`, or `"none"`. |
 | `minGapRatio` | `0.12` | Minimum gap size, as a fraction of the visible span, before it can be collapsed. |
 | `minGapYears` | `0` | Absolute floor in years for a collapsible gap. |
 | `collapsedRatio` | `0.022` | Width each collapsed gap keeps, as a fraction of the visible span. |
@@ -220,7 +233,13 @@ Years stay the unit of the public API: `setViewRange()`, `filters.fromYear`, axi
 The mapping itself is exported for custom axes or tooling:
 
 ```js
-import { buildTimeScale, TimeScale, normalizeTimeBreakOptions, DEFAULT_TIME_BREAK_OPTIONS } from "@mim/histui";
+import {
+  buildTimeScale,
+  TimeScale,
+  normalizeTimeBreakOptions,
+  DEFAULT_TIME_BREAK_OPTIONS,
+  TIME_BREAK_LABELS
+} from "@mim/histui";
 
 // The fourth argument is the zoom level: how many units fit in the frame.
 // Omit it to cut the axis as if the whole dataset were in view.
@@ -228,6 +247,7 @@ const scale = buildTimeScale(records, { start: -3000, end: 2026 }, { enabled: tr
 scale.toUnit(1979); // compressed coordinate
 scale.toYear(120); // back to a year
 scale.breaks; // collapsed segments
+scale.breaks[0]?.gapYears; // the empty stretch behind a break, context included
 ```
 
 ## Keyboard

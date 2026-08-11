@@ -19,6 +19,7 @@ export { dirForLanguage, makeTranslator, UI_STRINGS } from "./i18n.js";
 export * from "./paststruct.js";
 export {
   DEFAULT_TIME_BREAK_OPTIONS,
+  TIME_BREAK_LABELS,
   TimeScale,
   buildTimeScale,
   normalizeTimeBreakOptions

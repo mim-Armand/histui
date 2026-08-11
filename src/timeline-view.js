@@ -25,6 +25,7 @@ const TYPE_VARIABLES = {
 };
 
 const MIN_BREAK_BAND_PX = 15;
+const BREAK_GEOMETRY_OPTIONS = ["enabled", "minGapRatio", "minGapYears", "collapsedRatio", "contextRatio", "maxBreaks"];
 
 export class TimelineView {
   constructor({ stage, canvas, cards, hint, zoomBar, themeRoot, config, t, language, direction, onSelect, onViewportChange }) {
@@ -64,8 +65,10 @@ export class TimelineView {
     this.breakCatalog = [];
     this.lastBreaks = [];
     this.breakMarksKey = "";
-    // The view span the break map was cut for, so zoom changes can re-cut it.
+    // The view span and options the break map was cut for, so zoom or option changes can
+    // tell when it has to be cut again.
     this.scaleViewSpan = 0;
+    this.scaleOptions = null;
     this.rescalingTimeScale = false;
     // domain, extent and view are axis units, not years: identical to years while
     // no break is active, compressed across empty stretches once breaks exist.
@@ -318,6 +321,15 @@ export class TimelineView {
       ...options
     };
     this.timeBreaksEnabled = this.config.timeline.timeBreaks.enabled === true;
+    // Compared against the options the current map was cut with, not against the config,
+    // which callers may already have merged into. Changing what a chip says leaves the
+    // geometry, and any expanded gap, alone.
+    const next = this.getTimeBreakOptions();
+    const built = this.scaleOptions;
+    if (built && BREAK_GEOMETRY_OPTIONS.every((key) => built[key] === next[key])) {
+      this.render();
+      return;
+    }
     this.expandedBreakIds.clear();
     this.rebuildTimeScale();
   }
@@ -519,6 +531,8 @@ export class TimelineView {
 
   createTimeScale(viewSpan = this.scaleViewSpan) {
     const options = this.getTimeBreakOptions();
+    // Remembered so a later option change can tell a different cut from a different label.
+    this.scaleOptions = options;
     if (!options.enabled) {
       this.breakCatalog = [];
       return TimeScale.identity(this.yearDomain);
@@ -529,7 +543,9 @@ export class TimelineView {
       id: segment.id,
       startYear: segment.startYear,
       endYear: segment.endYear,
-      unitSpan: segment.unitSpan
+      unitSpan: segment.unitSpan,
+      gapStartYear: segment.gapStartYear,
+      gapEndYear: segment.gapEndYear
     }));
     for (const id of [...this.expandedBreakIds]) {
       if (!this.breakCatalog.some((entry) => entry.id === id)) this.expandedBreakIds.delete(id);
@@ -1703,6 +1719,9 @@ export class TimelineView {
         id: segment.id,
         startYear: segment.startYear,
         endYear: segment.endYear,
+        gapStartYear: segment.gapStartYear,
+        gapEndYear: segment.gapEndYear,
+        gapYears: Math.max(1, Math.round(segment.gapYears)),
         years: Math.max(1, Math.round(segment.yearSpan - segment.unitSpan)),
         startAxis: this.unitToAxis(segment.startUnit, metrics),
         endAxis: this.unitToAxis(segment.endUnit, metrics)
@@ -1714,6 +1733,9 @@ export class TimelineView {
           id: entry.id,
           startYear: entry.startYear,
           endYear: entry.endYear,
+          gapStartYear: entry.gapStartYear,
+          gapEndYear: entry.gapEndYear,
+          gapYears: Math.max(1, Math.round(entry.gapEndYear - entry.gapStartYear)),
           years: Math.max(1, Math.round(entry.endYear - entry.startYear)),
           startAxis: this.yearToAxis(entry.startYear, metrics),
           endAxis: this.yearToAxis(entry.endYear, metrics)
@@ -1724,6 +1746,7 @@ export class TimelineView {
     const horizontal = metrics.orientation === "horizontal";
     const reach = clamp((horizontal ? metrics.height : metrics.width) * 0.3, 48, 190);
     const obstacles = this.cardBoxes(metrics);
+    const labelMode = this.getTimeBreakOptions().label;
 
     for (const entry of entries) {
       const collapsed = entry.kind === "collapsed";
@@ -1743,7 +1766,7 @@ export class TimelineView {
         axis: anchor,
         highlighted: entry.id === this.hoveredBreakId
       };
-      resolved.label = this.breakChipLabel(resolved);
+      resolved.label = this.breakChipLabel(resolved, labelMode);
       resolved.chip = this.placeBreakChip(metrics, resolved, obstacles);
       obstacles.push(resolved.chip);
       resolved.bbox = collapsed
@@ -1787,11 +1810,23 @@ export class TimelineView {
   }
 
   placeBreakChip(metrics, entry, obstacles) {
-    const width = entry.label.length * 6.6 + 40;
-    const height = 27;
-    let position = this.breakLabelAnchor(metrics, entry, 0);
+    const width = entry.label ? entry.label.length * 6.2 + 34 : 24;
+    const height = 20;
+    // Year ranges make for wide chips, so every candidate spot is kept on the stage.
+    const anchor = (rank) => {
+      const spot = this.breakLabelAnchor(metrics, entry, rank);
+      const inset = (value, chipSize, stageSize) => {
+        const edge = chipSize / 2 + 4;
+        return clamp(value, edge, Math.max(edge, stageSize - edge));
+      };
+      return {
+        x: inset(spot.x, width, metrics.width),
+        y: inset(spot.y, height, metrics.height)
+      };
+    };
+    let position = anchor(0);
     for (let rank = 1; rank <= 6 && obstacles.some((box) => boxOverlapsChip(box, position, width, height)); rank += 1) {
-      position = this.breakLabelAnchor(metrics, entry, rank);
+      position = anchor(rank);
     }
     return {
       x: position.x,
@@ -1820,11 +1855,12 @@ export class TimelineView {
       this.breakMarksKey = key;
       this.breakLayer.innerHTML = this.lastBreaks.map((entry) => {
         const collapsed = entry.kind === "collapsed";
-        const description = `${this.t("timeBreakYears", { years: formatCount(entry.years, this.language) })} · ${this.t(collapsed ? "timeBreakHint" : "timeBreakCollapseHint")}`;
+        const description = `${this.t("timeBreakYears", { years: formatCount(entry.gapYears, this.language) })} · ${this.t(collapsed ? "timeBreakHint" : "timeBreakCollapseHint")}`;
+        const text = entry.label ? `<span>${escapeHtml(entry.label)}</span>` : "";
         return `
-          <button class="histui-break-mark ${collapsed ? "is-collapsed" : "is-expanded"}" type="button" data-break-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(description)}" style="--x:${Math.round(entry.chip.x)}px;--y:${Math.round(entry.chip.y)}px;">
+          <button class="histui-break-mark ${collapsed ? "is-collapsed" : "is-expanded"}${text ? "" : " is-bare"}" type="button" data-break-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(description)}" style="--x:${Math.round(entry.chip.x)}px;--y:${Math.round(entry.chip.y)}px;">
             <span class="histui-break-glyph" aria-hidden="true">${collapsed ? "⌇" : "⤢"}</span>
-            <span>${escapeHtml(entry.label)}</span>
+            ${text}
           </button>
         `;
       }).join("");
@@ -1839,11 +1875,42 @@ export class TimelineView {
     }
   }
 
-  breakChipLabel(entry) {
-    const years = formatCompactCount(entry.years, this.language);
-    return entry.kind === "collapsed"
-      ? this.t("timeBreakSkipped", { years })
-      : this.t("timeBreakEmpty", { years });
+  /**
+   * The chip text, per `timeBreaks.label`: how far apart the neighbouring records are
+   * (`gap`), what the axis dropped (`removed`), both, the years the cut sits between
+   * (`range`), or nothing at all. The tooltip always carries the full story.
+   */
+  breakChipLabel(entry, mode = this.getTimeBreakOptions().label) {
+    if (mode === "none") return "";
+    if (mode === "range") {
+      const from = formatYear(entry.gapStartYear, this.language, this.t);
+      const to = formatYear(entry.gapEndYear, this.language, this.t);
+      return `${from} - ${to}`;
+    }
+
+    const gap = this.breakYearCount(entry.gapYears);
+    if (entry.kind !== "collapsed") return this.t("timeBreakEmpty", { years: gap });
+    const removed = this.breakYearCount(entry.years);
+    if (mode === "gap") return this.t("timeBreakGap", { years: gap });
+    if (mode === "both") {
+      // Rounding can print the same number twice, which reads as a mistake; spell both
+      // out when that happens.
+      const collides = removed === gap;
+      return this.t("timeBreakBoth", {
+        removed: collides ? formatCount(entry.years, this.language) : removed,
+        years: collides ? formatCount(entry.gapYears, this.language) : gap
+      });
+    }
+    return this.t("timeBreakSkipped", { years: removed });
+  }
+
+  /**
+   * Break spans are printed to the year, because compact notation rounds `gap` and
+   * `removed` to the same figure (2,120 and 2,086 are both "2.1K"). Only spans too long
+   * to write out, which means deep time rather than history, fall back to compact.
+   */
+  breakYearCount(years) {
+    return years < 100000 ? formatCount(years, this.language) : formatCompactCount(years, this.language);
   }
 
   drawBreakMark(metrics, colors, entry) {
@@ -2213,12 +2280,17 @@ export class TimelineView {
     }
 
     const collapsed = entry.kind === "collapsed";
-    const range = `${formatYear(entry.startYear, this.language, this.t)} - ${formatYear(entry.endYear, this.language, this.t)}`;
+    const range = `${formatYear(entry.gapStartYear, this.language, this.t)} - ${formatYear(entry.gapEndYear, this.language, this.t)}`;
+    // The chip can be configured down to a glyph, so the tooltip reports every number.
+    const removed = collapsed
+      ? `<li>${escapeHtml(this.t("timeBreakRemoved", { years: formatCount(entry.years, this.language) }))}</li>`
+      : "";
     this.breakTooltip.innerHTML = `
       <strong>${escapeHtml(this.t(collapsed ? "timeBreakTitle" : "timeBreakOpenTitle"))}</strong>
       <ul>
-        <li>${escapeHtml(this.t("timeBreakYears", { years: formatCount(entry.years, this.language) }))}</li>
+        <li>${escapeHtml(this.t("timeBreakYears", { years: formatCount(entry.gapYears, this.language) }))}</li>
         <li>${escapeHtml(range)}</li>
+        ${removed}
       </ul>
       <span>${escapeHtml(this.t(collapsed ? "timeBreakHint" : "timeBreakCollapseHint"))}</span>
     `;

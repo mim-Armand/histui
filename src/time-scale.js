@@ -1,7 +1,10 @@
 import { clamp } from "./paststruct.js";
 
+export const TIME_BREAK_LABELS = ["gap", "removed", "both", "range", "none"];
+
 export const DEFAULT_TIME_BREAK_OPTIONS = {
   enabled: false,
+  label: "gap",
   minGapRatio: 0.12,
   minGapYears: 0,
   collapsedRatio: 0.022,
@@ -14,6 +17,7 @@ export function normalizeTimeBreakOptions(options = {}) {
   const numberOr = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
   return {
     enabled: options.enabled === true,
+    label: TIME_BREAK_LABELS.includes(options.label) ? options.label : DEFAULT_TIME_BREAK_OPTIONS.label,
     minGapRatio: clamp(numberOr(options.minGapRatio, DEFAULT_TIME_BREAK_OPTIONS.minGapRatio), 0.01, 0.9),
     minGapYears: Math.max(0, numberOr(options.minGapYears, DEFAULT_TIME_BREAK_OPTIONS.minGapYears)),
     collapsedRatio: clamp(numberOr(options.collapsedRatio, DEFAULT_TIME_BREAK_OPTIONS.collapsedRatio), 0.002, 0.2),
@@ -52,7 +56,11 @@ export class TimeScale {
       if (breakStart > cursor) {
         unit = this.pushSegment("dense", cursor, breakStart, unit, breakStart - cursor);
       }
-      const segment = this.pushSegmentEntry("break", breakStart, breakEnd, unit, unitSpan, entry.id);
+      const segment = this.pushSegmentEntry("break", breakStart, breakEnd, unit, unitSpan, {
+        id: entry.id,
+        gapStartYear: entry.gapStartYear,
+        gapEndYear: entry.gapEndYear
+      });
       unit = segment.endUnit;
       cursor = breakEnd;
       this.breaks.push(segment);
@@ -75,14 +83,21 @@ export class TimeScale {
     return this.pushSegmentEntry(kind, startYear, endYear, startUnit, unitSpan).endUnit;
   }
 
-  pushSegmentEntry(kind, startYear, endYear, startUnit, unitSpan, id) {
+  pushSegmentEntry(kind, startYear, endYear, startUnit, unitSpan, meta = {}) {
     const yearSpan = endYear - startYear;
+    // A break keeps a little context on each side, so the segment is shorter than the
+    // empty stretch it stands for; both spans are kept because labels can report either.
+    const gapStartYear = Number.isFinite(meta.gapStartYear) ? meta.gapStartYear : startYear;
+    const gapEndYear = Number.isFinite(meta.gapEndYear) ? meta.gapEndYear : endYear;
     const segment = {
       kind,
-      id: id || `${kind}:${Math.round(startYear)}:${Math.round(endYear)}`,
+      id: meta.id || `${kind}:${Math.round(startYear)}:${Math.round(endYear)}`,
       startYear,
       endYear,
       yearSpan,
+      gapStartYear,
+      gapEndYear,
+      gapYears: gapEndYear - gapStartYear,
       startUnit,
       endUnit: startUnit + unitSpan,
       unitSpan,
@@ -232,7 +247,14 @@ export function buildTimeScale(records, domain, options = {}, { viewSpan } = {})
     const endYear = gap.endYear - context;
     const unitSpan = Math.min(collapsedUnits, (endYear - startYear) * 0.75);
     if (!(unitSpan > 0)) continue;
-    breaks.push({ id: gap.id, startYear, endYear, unitSpan });
+    breaks.push({
+      id: gap.id,
+      startYear,
+      endYear,
+      unitSpan,
+      gapStartYear: gap.startYear,
+      gapEndYear: gap.endYear
+    });
   }
   if (!breaks.length) return identity;
 

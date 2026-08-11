@@ -11,18 +11,80 @@
         width: 100%;
         height: 100%;
         margin: 0;
+        background: #0f1412;
+      }
+
+      .demo {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        width: 100%;
+        height: 100%;
+      }
+
+      .demo-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 14px;
+        padding: 10px 16px;
+        border-bottom: 1px solid #35433b;
+        background: #151b18;
+        color: #edf2ea;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+      }
+
+      .demo-field {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #9ba89d;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .demo-field select {
+        padding: 5px 8px;
+        border: 1px solid #35433b;
+        border-radius: 8px;
+        background: #202821;
+        color: #edf2ea;
+        font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+        font-size: 12px;
+        letter-spacing: 0;
+        text-transform: none;
+      }
+
+      .demo-field select:disabled {
+        opacity: 0.45;
+      }
+
+      .demo-hint {
+        margin: 0;
+        color: #9ba89d;
+        font-size: 12px;
       }
 
       #timeline {
         width: 100%;
         height: 100%;
+        min-height: 0;
       }
     </style>
   </head>
   <body>
-    <div id="timeline"></div>
+    <main class="demo">
+      <header class="demo-bar">
+        <label class="demo-field">
+          Break label
+          <select data-demo="break-label"></select>
+        </label>
+        <p class="demo-hint" data-demo="break-hint"></p>
+      </header>
+      <div id="timeline"></div>
+    </main>
     <script type="module">
-      import { createHistuiTimeline } from "../src/index.js";
+      import { createHistuiTimeline, TIME_BREAK_LABELS } from "../src/index.js";
 
       const data = {
         paststructVersion: "1.0",
@@ -98,6 +160,7 @@
       };
 
       // Exposed so the demo can be driven from the console: histuiDemo.stepSelection(1)
+      // or histuiDemo.setTimeBreakOptions({ label: "range" }) to try the break labels.
       window.histuiDemo = createHistuiTimeline({
         container: "#timeline",
         data,
@@ -110,8 +173,42 @@
         timeBreaksEnabled: true,
         onSelect(record) {
           console.log("Selected", record.id);
+        },
+        onTrack(name, payload) {
+          // The built-in `Skip empty time` toggle reports through here, so the label
+          // picker can grey out while breaks are off.
+          if (name === "timeline_setting_change" && payload?.setting === "time-breaks") syncBreakLabel();
         }
       });
+
+      const breakLabelHints = {
+        gap: "Years between the records on either side of the cut.",
+        removed: "Years taken off the axis: the gap minus the context a break keeps.",
+        both: "Both numbers, removed first.",
+        range: "The years the cut sits between, instead of a duration.",
+        none: "Only the glyph. Hover a break for the numbers."
+      };
+
+      const breakLabelSelect = document.querySelector("[data-demo=break-label]");
+      const breakLabelHint = document.querySelector("[data-demo=break-hint]");
+
+      breakLabelSelect.innerHTML = TIME_BREAK_LABELS.map(
+        (label) => `<option value="${label}">${label}</option>`
+      ).join("");
+      breakLabelSelect.value = window.histuiDemo.config.timeline.timeBreaks.label;
+      breakLabelSelect.addEventListener("change", () => {
+        window.histuiDemo.setTimeBreakOptions({ label: breakLabelSelect.value });
+        syncBreakLabel();
+      });
+      syncBreakLabel();
+
+      function syncBreakLabel() {
+        const enabled = window.histuiDemo?.timeBreaksEnabled !== false;
+        breakLabelSelect.disabled = !enabled;
+        breakLabelHint.textContent = enabled
+          ? breakLabelHints[breakLabelSelect.value]
+          : "Turn on Skip empty time to see break labels.";
+      }
     </script>
   </body>
 </html>
