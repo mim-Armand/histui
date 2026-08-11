@@ -6,6 +6,7 @@ import {
   formatYear,
   textOf
 } from "./paststruct.js";
+import { TimeScale, buildTimeScale, normalizeTimeBreakOptions } from "./time-scale.js";
 
 const TYPE_SHAPES = {
   event: "circle",
@@ -22,6 +23,8 @@ const TYPE_VARIABLES = {
   phenomenon: "--type-phenomenon",
   structure: "--type-structure"
 };
+
+const MIN_BREAK_BAND_PX = 15;
 
 export class TimelineView {
   constructor({ stage, canvas, cards, hint, zoomBar, themeRoot, config, t, language, direction, onSelect, onViewportChange }) {
@@ -52,9 +55,23 @@ export class TimelineView {
     };
     this.lodEnabled = config.timeline?.lod?.enabled !== false;
     this.explodeEnabled = config.timeline?.explode?.enabled === true;
-    this.domain = { start: -100, end: 100 };
-    this.extent = { start: -100, end: 100 };
-    this.view = { start: -100, end: 100 };
+    this.timeBreaksEnabled = config.timeline?.timeBreaks?.enabled === true;
+    this.yearDomain = { start: -100, end: 100 };
+    this.yearExtent = { start: -100, end: 100 };
+    this.timeScale = TimeScale.identity(this.yearDomain);
+    this.expandedBreakIds = new Set();
+    this.hoveredBreakId = null;
+    this.breakCatalog = [];
+    this.lastBreaks = [];
+    this.breakMarksKey = "";
+    // The view span the break map was cut for, so zoom changes can re-cut it.
+    this.scaleViewSpan = 0;
+    this.rescalingTimeScale = false;
+    // domain, extent and view are axis units, not years: identical to years while
+    // no break is active, compressed across empty stretches once breaks exist.
+    this.domain = this.timeScale.unitDomain;
+    this.extent = this.timeScale.unitDomain;
+    this.view = this.timeScale.unitDomain;
     this.pointer = null;
     this.zoomPointer = null;
     this.kineticVelocity = 0;
@@ -76,6 +93,14 @@ export class TimelineView {
     this.clusterTooltip.className = "cluster-tooltip";
     this.clusterTooltip.hidden = true;
     this.stage.append(this.clusterTooltip);
+    this.breakTooltip = document.createElement("div");
+    this.breakTooltip.className = "cluster-tooltip break-tooltip";
+    this.breakTooltip.hidden = true;
+    this.stage.append(this.breakTooltip);
+    this.breakLayer = document.createElement("div");
+    this.breakLayer.className = "histui-break-marks";
+    this.stage.append(this.breakLayer);
+    this.setupBreakLayer();
     this.setupMeasurementLine();
     this.stage.classList.toggle("is-explode-mode", this.explodeEnabled);
     this.setupZoomBar();
@@ -85,7 +110,10 @@ export class TimelineView {
     this.boundAnimateViewport = (time) => this.animateViewport(time);
 
     this.stage.addEventListener("wheel", (event) => this.handleWheel(event), { passive: false });
-    this.stage.addEventListener("pointerdown", (event) => this.handlePointerDown(event));
+    this.stage.addEventListener("pointerdown", (event) => {
+      this.claimKeyboardFocus();
+      this.handlePointerDown(event);
+    });
     this.stage.addEventListener("pointermove", (event) => this.handlePointerMove(event));
     this.stage.addEventListener("pointerup", (event) => this.handlePointerUp(event));
     this.stage.addEventListener("pointercancel", (event) => this.handlePointerUp(event));
@@ -127,6 +155,7 @@ export class TimelineView {
       if (!card) return;
       event.preventDefault();
       event.stopPropagation();
+      this.claimKeyboardFocus();
       const record = this.idMap.get(card.dataset.recordId);
       if (record) {
         if (this.expandedCluster && !this.expandedCluster.recordIds.includes(record.id)) {
@@ -179,6 +208,24 @@ export class TimelineView {
     this.zoomBar.addEventListener("pointerup", (event) => this.handleZoomPointerUp(event));
     this.zoomBar.addEventListener("pointercancel", (event) => this.handleZoomPointerUp(event));
     this.zoomBar.addEventListener("keydown", (event) => this.handleZoomKeydown(event));
+  }
+
+  setupBreakLayer() {
+    const idOf = (event) => event.target.closest("[data-break-id]")?.dataset.breakId || null;
+    this.breakLayer.addEventListener("pointerover", (event) => this.setHoveredBreak(idOf(event)));
+    this.breakLayer.addEventListener("pointerout", (event) => {
+      const mark = event.target.closest("[data-break-id]");
+      if (!mark || mark.contains(event.relatedTarget)) return;
+      this.setHoveredBreak(null);
+    });
+    this.breakLayer.addEventListener("mouseleave", () => this.setHoveredBreak(null));
+    this.breakLayer.addEventListener("click", (event) => {
+      const id = idOf(event);
+      if (!id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.toggleTimeBreak(id);
+    });
   }
 
   setupMeasurementLine() {
@@ -251,6 +298,37 @@ export class TimelineView {
     this.render();
   }
 
+  setTimeBreaksEnabled(value) {
+    const nextValue = Boolean(value);
+    if (nextValue === this.timeBreaksEnabled) return;
+    this.timeBreaksEnabled = nextValue;
+    this.config.timeline = this.config.timeline || {};
+    this.config.timeline.timeBreaks = {
+      ...(this.config.timeline.timeBreaks || {}),
+      enabled: nextValue
+    };
+    this.expandedBreakIds.clear();
+    this.rebuildTimeScale();
+  }
+
+  setTimeBreakOptions(options = {}) {
+    this.config.timeline = this.config.timeline || {};
+    this.config.timeline.timeBreaks = {
+      ...(this.config.timeline.timeBreaks || {}),
+      ...options
+    };
+    this.timeBreaksEnabled = this.config.timeline.timeBreaks.enabled === true;
+    this.expandedBreakIds.clear();
+    this.rebuildTimeScale();
+  }
+
+  getTimeBreakOptions() {
+    return normalizeTimeBreakOptions({
+      ...(this.config.timeline?.timeBreaks || {}),
+      enabled: this.timeBreaksEnabled
+    });
+  }
+
   setMeasurementOptions(options = {}) {
     this.config.timeline = this.config.timeline || {};
     this.config.timeline.measurement = {
@@ -264,17 +342,23 @@ export class TimelineView {
 
   setRecords(records, { resetView = false } = {}) {
     this.suppressMeasurementChange = true;
+    const previousYears = this.records.length ? this.getViewYearRange() : null;
     this.records = records;
     this.idMap = new Map(records.map((record) => [record.id, record]));
     this.hoveredClusterId = null;
+    this.hoveredBreakId = null;
     this.expandedCluster = null;
+    this.expandedBreakIds.clear();
+    this.scaleViewSpan = 0;
     this.computeDomain();
     if (resetView || !records.some((record) => record.id === this.selectedId)) {
       this.fit();
-    } else {
-      this.clampView();
-      this.render();
+      return;
     }
+    if (previousYears) this.view = this.unitRangeForYears(previousYears.start, previousYears.end);
+    this.clampView();
+    this.syncTimeScaleForZoom();
+    this.render();
   }
 
   select(recordId, emit = false) {
@@ -283,13 +367,75 @@ export class TimelineView {
     if (emit) this.onSelect?.(this.idMap.get(recordId) || null);
   }
 
+  recordsInTimeOrder() {
+    return [...this.records].sort((a, b) =>
+      a.__meta.start - b.__meta.start
+      || a.__meta.end - b.__meta.end
+      || String(a.id).localeCompare(String(b.id)));
+  }
+
+  /**
+   * Selects the record before or after the current one and travels to it. Without a
+   * selection the walk starts from whatever sits at the centre of the frame, so the
+   * first press moves to the neighbouring record rather than jumping to the dataset edge.
+   */
+  stepRecord(direction = 1) {
+    if (!this.records.length) return null;
+    const ordered = this.recordsInTimeOrder();
+    const step = direction >= 0 ? 1 : -1;
+    let index = this.selectedId ? ordered.findIndex((record) => record.id === this.selectedId) : -1;
+
+    if (index >= 0) {
+      index = clamp(index + step, 0, ordered.length - 1);
+    } else {
+      const centerYear = this.timeScale.toYear((this.view.start + this.view.end) / 2);
+      index = step > 0
+        ? ordered.findIndex((record) => record.__meta.start > centerYear)
+        : ordered.findLastIndex((record) => record.__meta.start < centerYear);
+      if (index < 0) index = step > 0 ? ordered.length - 1 : 0;
+    }
+
+    const record = ordered[index];
+    if (!record) return null;
+    this.focusRecord(record.id, { emit: true });
+    return record;
+  }
+
+  /**
+   * Centres a record, keeping the current zoom unless the record is too long to fit.
+   */
+  focusRecord(recordId, { animate = true, emit = false } = {}) {
+    const record = this.idMap.get(recordId);
+    if (!record) return false;
+
+    const span = Math.max(1, this.view.end - this.view.start);
+    const startUnit = this.timeScale.toUnit(record.__meta.start);
+    const endUnit = this.timeScale.toUnit(record.__meta.end);
+    const center = (startUnit + endUnit) / 2;
+    const recordSpan = Math.max(0, endUnit - startUnit);
+    const targetSpan = recordSpan > span * 0.7 ? recordSpan * 1.45 : span;
+    const travel = Math.abs(center - (this.view.start + this.view.end) / 2) / span;
+    const base = this.config.timeline?.keyboardStepMs ?? 460;
+
+    this.selectedId = recordId;
+    this.setViewRange(center - targetSpan / 2, center + targetSpan / 2, {
+      animate,
+      clampTo: "domain",
+      easing: "in-out",
+      duration: base * clamp(0.7 + travel, 0.7, 2.1)
+    });
+    if (emit) this.onSelect?.(record);
+    return true;
+  }
+
   setHovered(recordId, { source = "timeline" } = {}) {
     const nextId = recordId && this.idMap.has(recordId) ? recordId : null;
     const nextClusterId = null;
-    if (nextId === this.hoveredId && nextClusterId === this.hoveredClusterId) return;
+    if (nextId === this.hoveredId && nextClusterId === this.hoveredClusterId && !this.hoveredBreakId) return;
     const needsCardRender = source === "timeline" || (nextId && !this.hasRenderedCard(nextId));
     this.hoveredId = nextId;
     this.hoveredClusterId = nextClusterId;
+    this.hoveredBreakId = null;
     this.updateHoverCursor();
     this.render({ renderCards: needsCardRender });
     if (!needsCardRender) this.updateCardHighlightClasses();
@@ -297,15 +443,26 @@ export class TimelineView {
 
   setHoveredCluster(clusterId) {
     const nextId = clusterId && this.lastClusters.some((cluster) => cluster.id === clusterId) ? clusterId : null;
-    if (nextId === this.hoveredClusterId && !this.hoveredId) return;
+    if (nextId === this.hoveredClusterId && !this.hoveredId && !this.hoveredBreakId) return;
     this.hoveredId = null;
     this.hoveredClusterId = nextId;
+    this.hoveredBreakId = null;
+    this.updateHoverCursor();
+    this.render({ renderCards: false });
+  }
+
+  setHoveredBreak(breakId) {
+    const nextId = breakId && this.lastBreaks.some((entry) => entry.id === breakId) ? breakId : null;
+    if (nextId === this.hoveredBreakId && !this.hoveredId && !this.hoveredClusterId) return;
+    this.hoveredId = null;
+    this.hoveredClusterId = null;
+    this.hoveredBreakId = nextId;
     this.updateHoverCursor();
     this.render({ renderCards: false });
   }
 
   updateHoverCursor() {
-    this.stage.classList.toggle("has-hit-hover", Boolean(this.hoveredId || this.hoveredClusterId));
+    this.stage.classList.toggle("has-hit-hover", Boolean(this.hoveredId || this.hoveredClusterId || this.hoveredBreakId));
   }
 
   hasRenderedCard(recordId) {
@@ -319,15 +476,29 @@ export class TimelineView {
   }
 
   fit({ animate = false } = {}) {
+    // Fitting makes the frame the whole domain, and the domain depends on how much of
+    // the frame each gap takes, so let the two settle before moving the view.
+    if (!this.rescalingTimeScale) {
+      this.rescalingTimeScale = true;
+      for (let pass = 0; pass < 3; pass += 1) {
+        if (!this.rescaleForZoom(this.domain.end - this.domain.start)) break;
+      }
+      this.rescalingTimeScale = false;
+    }
     const span = Math.max(1, this.domain.end - this.domain.start);
-    this.setViewRange(this.domain.start, this.domain.end || this.domain.start + span, { animate, motion: false });
+    this.setViewRange(this.domain.start, this.domain.end || this.domain.start + span, {
+      animate,
+      motion: false,
+      sync: false
+    });
   }
 
   computeDomain() {
     if (!this.records.length) {
       const now = new Date().getUTCFullYear();
-      this.extent = { start: now - 10, end: now + 10 };
-      this.domain = { start: now - 10, end: now + 10 };
+      this.yearExtent = { start: now - 10, end: now + 10 };
+      this.yearDomain = { start: now - 10, end: now + 10 };
+      this.applyTimeScale(TimeScale.identity(this.yearDomain));
       return;
     }
 
@@ -336,16 +507,151 @@ export class TimelineView {
     const min = Math.min(...starts, ...ends);
     const max = Math.max(...starts, ...ends);
     const rawSpan = Math.max(1, max - min);
-    const paddingRatio = this.config.timeline?.defaultPaddingRatio ?? 0.08;
-    const padding = Math.max(rawSpan * paddingRatio, Math.min(25, rawSpan));
-    this.extent = {
+    this.yearExtent = {
       start: min,
       end: max || min + rawSpan
     };
-    this.domain = {
-      start: min - padding,
-      end: max + padding
+    // The scale spans the records only; padding is added in axis units so it stays
+    // proportional to the drawn axis instead of to the raw (possibly mostly empty) years.
+    this.yearDomain = { ...this.yearExtent };
+    this.applyTimeScale(this.createTimeScale());
+  }
+
+  createTimeScale(viewSpan = this.scaleViewSpan) {
+    const options = this.getTimeBreakOptions();
+    if (!options.enabled) {
+      this.breakCatalog = [];
+      return TimeScale.identity(this.yearDomain);
+    }
+
+    const scale = buildTimeScale(this.records, this.yearDomain, options, { viewSpan });
+    this.breakCatalog = scale.breaks.map((segment) => ({
+      id: segment.id,
+      startYear: segment.startYear,
+      endYear: segment.endYear,
+      unitSpan: segment.unitSpan
+    }));
+    for (const id of [...this.expandedBreakIds]) {
+      if (!this.breakCatalog.some((entry) => entry.id === id)) this.expandedBreakIds.delete(id);
+    }
+    if (!this.expandedBreakIds.size) return scale;
+    return new TimeScale(this.yearDomain, this.breakCatalog.filter((entry) => !this.expandedBreakIds.has(entry.id)));
+  }
+
+  applyTimeScale(scale) {
+    this.timeScale = scale;
+    this.extent = {
+      start: scale.toUnit(this.yearExtent.start),
+      end: scale.toUnit(this.yearExtent.end)
     };
+    const span = Math.max(1, this.extent.end - this.extent.start);
+    const paddingRatio = this.config.timeline?.defaultPaddingRatio ?? 0.08;
+    const padding = Math.max(span * paddingRatio, Math.min(25, span));
+    this.domain = {
+      start: this.extent.start - padding,
+      end: this.extent.end + padding
+    };
+  }
+
+  rebuildTimeScale({ animate = false } = {}) {
+    const previousYears = this.records.length ? this.getViewYearRange() : null;
+    // Enabling breaks or changing their options keeps the visible years and cuts the
+    // axis for the zoom the viewer is already at.
+    const frame = this.scaleFrameFor(this.view.end - this.view.start);
+    this.applyTimeScale(this.createTimeScale(frame));
+    this.scaleViewSpan = this.timeBreaksEnabled ? frame : 0;
+    this.hoveredBreakId = null;
+    if (!previousYears) {
+      this.fit();
+      return;
+    }
+    const target = this.unitRangeForYears(previousYears.start, previousYears.end);
+    if (animate) {
+      this.setViewRange(target.start, target.end, { animate: true });
+      return;
+    }
+    this.view = target;
+    this.clampView();
+    this.syncTimeScaleForZoom();
+    this.render();
+  }
+
+  // The deepest allowed zoom is also the finest the axis is ever cut, which keeps a
+  // request for a mostly empty range from chasing an ever smaller frame.
+  scaleFrameFor(viewSpan) {
+    return Math.max(viewSpan, this.config.timeline?.minZoomSpanYears || 2);
+  }
+
+  /**
+   * Re-cuts the axis for a new zoom level. The unit span is kept, so the pixels per
+   * dense year stay put and the frame simply reaches further once a gap collapses;
+   * `anchorYear` stays at `anchorFraction` of the frame so the point under the
+   * cursor (or the centre) does not slide while the map changes underneath.
+   */
+  rescaleForZoom(viewSpan, { anchorYear = null, anchorFraction = 0.5 } = {}) {
+    if (!this.timeBreaksEnabled || !this.records.length || !(viewSpan > 0)) return false;
+    const frame = this.scaleFrameFor(viewSpan);
+    const previous = this.scaleViewSpan;
+    const tolerance = 1 + this.getTimeBreakOptions().zoomSyncRatio;
+    if (previous > 0 && frame < previous * tolerance && frame > previous / tolerance) return false;
+
+    const anchor = Number.isFinite(anchorYear)
+      ? anchorYear
+      : this.timeScale.toYear((this.view.start + this.view.end) / 2);
+    this.applyTimeScale(this.createTimeScale(frame));
+    this.scaleViewSpan = frame;
+    const start = this.timeScale.toUnit(anchor) - anchorFraction * viewSpan;
+    this.view = { start, end: start + viewSpan };
+    this.clampView();
+    return true;
+  }
+
+  /**
+   * Settles the map against the current zoom. Collapsing gaps shortens the domain,
+   * which can clamp the view and change the zoom again, so a few passes run until
+   * the span stops moving.
+   */
+  syncTimeScaleForZoom(anchor) {
+    if (this.rescalingTimeScale) return false;
+    // A navigator drag reads positions in units it captured when the gesture started,
+    // so the axis waits until the handle is released before it is re-cut.
+    if (this.zoomPointer) return false;
+    this.rescalingTimeScale = true;
+    let changed = false;
+    try {
+      for (let pass = 0; pass < 3; pass += 1) {
+        if (!this.rescaleForZoom(this.view.end - this.view.start, pass === 0 ? anchor : undefined)) break;
+        changed = true;
+      }
+    } finally {
+      this.rescalingTimeScale = false;
+    }
+    return changed;
+  }
+
+  getViewYearRange() {
+    return {
+      start: this.timeScale.toYear(this.view.start),
+      end: this.timeScale.toYear(this.view.end)
+    };
+  }
+
+  unitRangeForYears(startYear, endYear) {
+    return {
+      start: this.timeScale.toUnit(startYear),
+      end: this.timeScale.toUnit(endYear)
+    };
+  }
+
+  setViewYearRange(startYear, endYear, options) {
+    // Cutting the axis changes how many units those years take, which changes the zoom
+    // the map should be cut for, so let the two settle before placing the view.
+    for (let pass = 0; pass < 3; pass += 1) {
+      const range = this.unitRangeForYears(startYear, endYear);
+      if (!this.rescaleForZoom(range.end - range.start)) break;
+    }
+    const range = this.unitRangeForYears(startYear, endYear);
+    this.setViewRange(range.start, range.end, { ...options, sync: false });
   }
 
   handleWheel(event) {
@@ -423,12 +729,26 @@ export class TimelineView {
     this.startAnimation();
   }
 
+  /**
+   * Parks focus on the stage so the arrow keys keep stepping. Selecting a record
+   * re-renders the cards, which removes the focused card button and would otherwise
+   * drop focus back to the document.
+   */
+  claimKeyboardFocus() {
+    if (document.activeElement === this.stage) return;
+    this.stage.focus({ preventScroll: true });
+  }
+
   handleStageClick(event) {
     if (this.suppressStageClick) return;
     if (event.target.closest("[data-record-id], button, input, select, textarea, a")) return;
     const hit = this.hitTestEvent(event);
     if (hit?.cluster) {
       this.expandCluster(hit.cluster);
+      return;
+    }
+    if (hit?.break) {
+      this.toggleTimeBreak(hit.break.id);
       return;
     }
     if (hit?.record) {
@@ -447,6 +767,10 @@ export class TimelineView {
       this.setHoveredCluster(hit.cluster.id);
       return;
     }
+    if (hit?.break) {
+      this.setHoveredBreak(hit.break.id);
+      return;
+    }
     this.setHovered(hit?.record?.id || null, { source: "timeline" });
   }
 
@@ -460,26 +784,38 @@ export class TimelineView {
   }
 
   handleKeydown(event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
     const metrics = this.measure();
-    const spanPixels = metrics.axisLength || 1;
-    const panStep = spanPixels * 0.08;
 
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
       this.zoomBy(0.72);
-    } else if (event.key === "-" || event.key === "_") {
+      return;
+    }
+    if (event.key === "-" || event.key === "_") {
       event.preventDefault();
       this.zoomBy(1.35);
-    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      event.preventDefault();
-      this.panByPixels(panStep, metrics);
-    } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      event.preventDefault();
-      this.panByPixels(-panStep, metrics);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      this.fit();
+      return;
     }
+    if (event.key === "Home") {
+      event.preventDefault();
+      this.fit({ animate: true });
+      return;
+    }
+
+    const back = event.key === "ArrowLeft" || event.key === "ArrowUp";
+    const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+    if (!back && !forward) return;
+    event.preventDefault();
+
+    // Plain arrows hop between records; Shift keeps the older nudge-the-viewport pan.
+    if (event.shiftKey) {
+      const panStep = (metrics.axisLength || 1) * 0.08;
+      this.panByPixels(back ? panStep : -panStep, metrics);
+      return;
+    }
+    if (this.cards.contains(document.activeElement)) this.claimKeyboardFocus();
+    this.stepRecord(back ? -1 : 1);
   }
 
   handleZoomPointerDown(event) {
@@ -491,7 +827,7 @@ export class TimelineView {
     this.zoomBar.setPointerCapture(event.pointerId);
 
     const metrics = this.measureZoomBar();
-    const year = this.zoomClientToYear(event, metrics);
+    const unit = this.zoomClientToUnit(event, metrics);
     const role = event.target.closest("[data-zoom-role]")?.dataset.zoomRole || "select";
     const currentRange = this.getNavigatorViewRange();
     const mode = role === "handle-start"
@@ -503,8 +839,8 @@ export class TimelineView {
     this.zoomPointer = {
       id: event.pointerId,
       mode,
-      startYear: year,
-      currentYear: year,
+      startUnit: unit,
+      currentUnit: unit,
       initialRange: currentRange,
       moved: false
     };
@@ -512,7 +848,7 @@ export class TimelineView {
     this.wheelVelocity = 0;
     this.zoomBar.classList.add("is-interacting", mode === "select" ? "is-selecting" : `is-${mode}`);
 
-    if (mode === "select") this.updateZoomSelection(year, year, metrics);
+    if (mode === "select") this.updateZoomSelection(unit, unit, metrics);
     else this.hideZoomSelection();
   }
 
@@ -522,21 +858,21 @@ export class TimelineView {
     event.stopPropagation();
 
     const metrics = this.measureZoomBar();
-    const year = this.zoomClientToYear(event, metrics);
+    const unit = this.zoomClientToUnit(event, metrics);
     const pointer = this.zoomPointer;
     const bounds = this.getNavigatorDomain();
     const minSpan = this.config.timeline?.minZoomSpanYears || 2;
-    pointer.currentYear = year;
-    pointer.moved = pointer.moved || Math.abs(this.zoomYearToAxis(year, metrics) - this.zoomYearToAxis(pointer.startYear, metrics)) > 2;
+    pointer.currentUnit = unit;
+    pointer.moved = pointer.moved || Math.abs(this.zoomUnitToAxis(unit, metrics) - this.zoomUnitToAxis(pointer.startUnit, metrics)) > 2;
 
     if (pointer.mode === "select") {
-      this.updateZoomSelection(pointer.startYear, year, metrics);
+      this.updateZoomSelection(pointer.startUnit, unit, metrics);
       return;
     }
 
     if (pointer.mode === "pan") {
       const span = pointer.initialRange.end - pointer.initialRange.start;
-      const delta = year - pointer.startYear;
+      const delta = unit - pointer.startUnit;
       let nextStart = pointer.initialRange.start + delta;
       let nextEnd = pointer.initialRange.end + delta;
       if (span >= bounds.end - bounds.start) {
@@ -555,14 +891,14 @@ export class TimelineView {
 
     if (pointer.mode === "start") {
       const fixedEnd = pointer.initialRange.end;
-      const nextStart = clamp(year, bounds.start, fixedEnd - minSpan);
+      const nextStart = clamp(unit, bounds.start, fixedEnd - minSpan);
       this.setViewRange(nextStart, fixedEnd, { clampTo: "navigator" });
       return;
     }
 
     if (pointer.mode === "end") {
       const fixedStart = pointer.initialRange.start;
-      const nextEnd = clamp(year, fixedStart + minSpan, bounds.end);
+      const nextEnd = clamp(unit, fixedStart + minSpan, bounds.end);
       this.setViewRange(fixedStart, nextEnd, { clampTo: "navigator" });
     }
   }
@@ -579,16 +915,19 @@ export class TimelineView {
     this.zoomBar.classList.remove("is-interacting", "is-selecting", "is-start", "is-end", "is-pan");
 
     if (pointer.mode === "select") {
-      const startPx = this.zoomYearToAxis(pointer.startYear, metrics);
-      const endPx = this.zoomYearToAxis(pointer.currentYear, metrics);
+      const startPx = this.zoomUnitToAxis(pointer.startUnit, metrics);
+      const endPx = this.zoomUnitToAxis(pointer.currentUnit, metrics);
       const minPixels = this.config.timeline?.navigator?.minSelectionPixels ?? 10;
       this.hideZoomSelection();
       if (Math.abs(endPx - startPx) >= minPixels) {
-        const nextStart = Math.min(pointer.startYear, pointer.currentYear);
-        const nextEnd = Math.max(pointer.startYear, pointer.currentYear);
+        const nextStart = Math.min(pointer.startUnit, pointer.currentUnit);
+        const nextEnd = Math.max(pointer.startUnit, pointer.currentUnit);
         this.setViewRange(nextStart, nextEnd, { animate: true, clampTo: "navigator" });
       }
+      return;
     }
+
+    if (this.syncTimeScaleForZoom()) this.render();
   }
 
   handleZoomKeydown(event) {
@@ -680,10 +1019,12 @@ export class TimelineView {
     const maxSpan = domainSpan * (this.config.timeline?.maxZoomMultiplier || 2.5);
     const nextSpan = clamp(span * factor, minSpan, maxSpan);
     const fraction = clamp((axisPoint - metrics.axisStart) / Math.max(1, metrics.axisLength), 0, 1);
-    const focusYear = this.view.start + fraction * span;
+    const focusUnit = this.view.start + fraction * span;
 
-    const nextStart = focusYear - fraction * nextSpan;
-    this.setViewRange(nextStart, nextStart + nextSpan);
+    const nextStart = focusUnit - fraction * nextSpan;
+    this.setViewRange(nextStart, nextStart + nextSpan, {
+      anchor: { anchorYear: this.timeScale.toYear(focusUnit), anchorFraction: fraction }
+    });
   }
 
   zoomNavigatorRange(factor) {
@@ -693,10 +1034,15 @@ export class TimelineView {
     this.setViewRange(center - nextSpan / 2, center + nextSpan / 2, { animate: true, clampTo: "navigator" });
   }
 
-  setViewRange(start, end, { animate = false, clampTo = "domain", motion = true } = {}) {
+  /**
+   * `sync: false` is for callers that already settled the break map and want the view
+   * placed exactly as asked, instead of having the zoom sync trade the freed pixels
+   * for a wider reach.
+   */
+  setViewRange(start, end, { animate = false, clampTo = "domain", motion = true, anchor, duration, easing, sync = true } = {}) {
     const target = this.normalizeViewRange(start, end, clampTo);
     if (animate) {
-      this.animateViewTo(target.start, target.end, clampTo);
+      this.animateViewTo(target.start, target.end, { clampTo, duration, easing, anchor, sync });
       return;
     }
 
@@ -705,6 +1051,7 @@ export class TimelineView {
     if (motion) this.markViewportMoving();
     this.view = target;
     if (clampTo !== "navigator") this.clampView();
+    if (sync) this.syncTimeScaleForZoom(anchor);
     this.render();
   }
 
@@ -744,18 +1091,22 @@ export class TimelineView {
     return { start: nextStart, end: nextEnd };
   }
 
-  animateViewTo(start, end, clampTo = "navigator") {
+  animateViewTo(start, end, { clampTo = "navigator", duration, easing = "out", anchor, sync = true } = {}) {
     this.cancelViewportAnimation();
     this.clearExpandedCluster({ render: false });
     this.kineticVelocity = 0;
     this.wheelVelocity = 0;
     const target = this.normalizeViewRange(start, end, clampTo);
-    this.markViewportMoving((this.config.timeline?.navigator?.animationMs ?? 420) + 120);
+    const span = duration ?? this.config.timeline?.navigator?.animationMs ?? 420;
+    this.markViewportMoving(span + 120);
     this.viewportAnimation = {
       from: { ...this.view },
       to: target,
       startTime: 0,
-      duration: this.config.timeline?.navigator?.animationMs ?? 420
+      duration: span,
+      ease: easing === "in-out" ? easeInOutCubic : easeOutCubic,
+      anchor,
+      sync
     };
     this.viewportAnimationFrame = requestAnimationFrame(this.boundAnimateViewport);
   }
@@ -763,9 +1114,9 @@ export class TimelineView {
   animateViewport(time) {
     if (!this.viewportAnimation) return;
     if (!this.viewportAnimation.startTime) this.viewportAnimation.startTime = time;
-    const { from, to, startTime, duration } = this.viewportAnimation;
+    const { from, to, startTime, duration, ease, anchor, sync } = this.viewportAnimation;
     const progress = clamp((time - startTime) / Math.max(1, duration), 0, 1);
-    const eased = easeOutCubic(progress);
+    const eased = ease(progress);
     this.view = {
       start: from.start + (to.start - from.start) * eased,
       end: from.end + (to.end - from.end) * eased
@@ -780,6 +1131,9 @@ export class TimelineView {
     this.viewportAnimationFrame = 0;
     this.viewportAnimation = null;
     this.view = to;
+    // Re-cut the axis once the motion settles rather than mid-flight, so an animated
+    // zoom never changes the geometry it is animating through.
+    if (sync) this.syncTimeScaleForZoom(anchor);
     this.render();
   }
 
@@ -858,9 +1212,18 @@ export class TimelineView {
     return metrics;
   }
 
-  yearToAxis(year, metrics) {
+  unitToAxis(unit, metrics) {
     const span = this.view.end - this.view.start;
-    return metrics.axisStart + ((year - this.view.start) / span) * metrics.axisLength;
+    return metrics.axisStart + ((unit - this.view.start) / span) * metrics.axisLength;
+  }
+
+  axisToUnit(axis, metrics) {
+    const span = this.view.end - this.view.start;
+    return this.view.start + ((axis - metrics.axisStart) / Math.max(1, metrics.axisLength)) * span;
+  }
+
+  yearToAxis(year, metrics) {
+    return this.unitToAxis(this.timeScale.toUnit(year), metrics);
   }
 
   render({ renderCards = true } = {}) {
@@ -890,22 +1253,34 @@ export class TimelineView {
     this.drawCardConnectors(metrics, colors, items.display);
     this.drawMarkers(metrics, colors, items.all, items.display);
     this.drawClusters(metrics, colors, items.hidden);
+    this.drawTimeBreaks(metrics, colors);
+    this.renderBreakMarks();
     this.renderClusterTooltip(metrics);
+    this.renderBreakTooltip(metrics);
     this.renderZoomBar(colors);
     this.renderMeasurementLine(metrics);
     if (renderCards) this.renderCards(metrics, items.display);
     else this.updateCardHighlightClasses();
     this.renderHint(metrics, items);
     this.stage.dataset.orientation = metrics.orientation;
+    this.stage.classList.toggle("has-time-breaks", this.lastBreaks.length > 0);
 
+    const viewYears = this.getViewYearRange();
     this.onViewportChange?.({
       orientation: metrics.orientation,
       placement: metrics.placement,
-      span: this.view.end - this.view.start,
+      start: viewYears.start,
+      end: viewYears.end,
+      span: viewYears.end - viewYears.start,
+      compressedSpan: this.view.end - this.view.start,
       visible: items.display.length,
       hidden: items.hidden.length,
       total: this.records.length,
-      lod: items.lod
+      lod: items.lod,
+      timeBreaksEnabled: this.timeBreaksEnabled,
+      breaks: this.lastBreaks.length,
+      breakCount: this.timeScale.breaks.length,
+      skippedYears: this.lastBreaks.reduce((total, entry) => total + entry.skippedYears, 0)
     });
   }
 
@@ -931,13 +1306,14 @@ export class TimelineView {
 
     this.drawZoomGrid(ctx, metrics, colors);
     this.drawZoomEvents(ctx, metrics, colors);
+    this.drawZoomBreaks(ctx, metrics, colors);
     this.updateZoomWindow(metrics);
     if (this.zoomPointer?.mode === "select") {
-      this.updateZoomSelection(this.zoomPointer.startYear, this.zoomPointer.currentYear, metrics);
+      this.updateZoomSelection(this.zoomPointer.startUnit, this.zoomPointer.currentUnit, metrics);
     }
 
-    this.zoomLabelStart.textContent = formatYear(metrics.domain.start, this.language, this.t);
-    this.zoomLabelEnd.textContent = formatYear(metrics.domain.end, this.language, this.t);
+    this.zoomLabelStart.textContent = formatYear(this.timeScale.toYear(metrics.domain.start), this.language, this.t);
+    this.zoomLabelEnd.textContent = formatYear(this.timeScale.toYear(metrics.domain.end), this.language, this.t);
   }
 
   drawZoomGrid(ctx, metrics, colors) {
@@ -958,7 +1334,7 @@ export class TimelineView {
     ctx.globalAlpha = 0.44;
     const first = Math.ceil(metrics.domain.start / step) * step;
     for (let tick = first; tick <= metrics.domain.end + step * 0.5; tick += step) {
-      const x = this.zoomYearToAxis(tick, metrics);
+      const x = this.zoomUnitToAxis(tick, metrics);
       ctx.beginPath();
       ctx.moveTo(x, baseline - 18);
       ctx.lineTo(x, baseline + 18);
@@ -967,19 +1343,48 @@ export class TimelineView {
     ctx.restore();
   }
 
+  drawZoomBreaks(ctx, metrics, colors) {
+    if (!this.timeScale.hasBreaks) return;
+    const baseline = metrics.axisY;
+    ctx.save();
+    for (const segment of this.timeScale.breaks) {
+      const start = this.zoomUnitToAxis(segment.startUnit, metrics);
+      const end = this.zoomUnitToAxis(segment.endUnit, metrics);
+      const center = (start + end) / 2;
+      const width = Math.max(end - start, 5);
+
+      ctx.fillStyle = colors.panel || colors.background;
+      ctx.globalAlpha = 0.92;
+      ctx.fillRect(center - width / 2, baseline - 20, width, 40);
+
+      ctx.strokeStyle = colors.accent2;
+      ctx.globalAlpha = 0.62;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      for (const edge of [center - width / 2, center + width / 2]) {
+        ctx.beginPath();
+        ctx.moveTo(edge, baseline - 19);
+        ctx.lineTo(edge, baseline + 19);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
+  }
+
   drawZoomEvents(ctx, metrics, colors) {
     const range = this.getNavigatorViewRange();
-    const viewStart = Math.min(range.start, range.end);
-    const viewEnd = Math.max(range.start, range.end);
+    const viewStart = this.timeScale.toYear(Math.min(range.start, range.end));
+    const viewEnd = this.timeScale.toYear(Math.max(range.start, range.end));
     const baseline = metrics.axisY;
 
     ctx.save();
     const sorted = [...this.records].sort((a, b) => a.__meta.importance - b.__meta.importance);
     for (const record of sorted) {
-      const start = clamp(record.__meta.start, metrics.domain.start, metrics.domain.end);
-      const end = clamp(record.__meta.end, metrics.domain.start, metrics.domain.end);
-      const x = this.zoomYearToAxis(start, metrics);
-      const endX = this.zoomYearToAxis(end, metrics);
+      const start = clamp(this.timeScale.toUnit(record.__meta.start), metrics.domain.start, metrics.domain.end);
+      const end = clamp(this.timeScale.toUnit(record.__meta.end), metrics.domain.start, metrics.domain.end);
+      const x = this.zoomUnitToAxis(start, metrics);
+      const endX = this.zoomUnitToAxis(end, metrics);
       const color = this.colorForRecord(record, colors);
       const insideView = record.__meta.end >= viewStart && record.__meta.start <= viewEnd;
       const selected = record.id === this.selectedId;
@@ -1012,18 +1417,20 @@ export class TimelineView {
   updateZoomWindow(metrics = this.measureZoomBar()) {
     if (!this.zoomWindow) return;
     const range = this.getNavigatorViewRange();
-    const left = this.zoomYearToAxis(range.start, metrics);
-    const right = this.zoomYearToAxis(range.end, metrics);
+    const left = this.zoomUnitToAxis(range.start, metrics);
+    const right = this.zoomUnitToAxis(range.end, metrics);
     const width = Math.max(12, right - left);
     this.zoomWindow.style.left = `${left}px`;
     this.zoomWindow.style.width = `${width}px`;
-    this.zoomWindowLabel.textContent = `${formatYear(range.start, this.language, this.t)} - ${formatYear(range.end, this.language, this.t)}`;
+    const startYear = this.timeScale.toYear(range.start);
+    const endYear = this.timeScale.toYear(range.end);
+    this.zoomWindowLabel.textContent = `${formatYear(startYear, this.language, this.t)} - ${formatYear(endYear, this.language, this.t)}`;
   }
 
-  updateZoomSelection(startYear, endYear, metrics = this.measureZoomBar()) {
+  updateZoomSelection(startUnit, endUnit, metrics = this.measureZoomBar()) {
     if (!this.zoomSelection) return;
-    const start = this.zoomYearToAxis(startYear, metrics);
-    const end = this.zoomYearToAxis(endYear, metrics);
+    const start = this.zoomUnitToAxis(startUnit, metrics);
+    const end = this.zoomUnitToAxis(endUnit, metrics);
     const left = Math.min(start, end);
     const width = Math.max(1, Math.abs(end - start));
     this.zoomSelection.style.left = `${left}px`;
@@ -1071,19 +1478,19 @@ export class TimelineView {
     return this.normalizeViewRange(center - minSpan / 2, center + minSpan / 2, "navigator");
   }
 
-  zoomYearToAxis(year, metrics = this.measureZoomBar()) {
-    const fraction = clamp((year - metrics.domain.start) / Math.max(1, metrics.domain.end - metrics.domain.start), 0, 1);
+  zoomUnitToAxis(unit, metrics = this.measureZoomBar()) {
+    const fraction = clamp((unit - metrics.domain.start) / Math.max(1, metrics.domain.end - metrics.domain.start), 0, 1);
     return metrics.axisStart + fraction * metrics.axisLength;
   }
 
-  zoomAxisToYear(axis, metrics = this.measureZoomBar()) {
+  zoomAxisToUnit(axis, metrics = this.measureZoomBar()) {
     const fraction = clamp((axis - metrics.axisStart) / Math.max(1, metrics.axisLength), 0, 1);
     return metrics.domain.start + fraction * (metrics.domain.end - metrics.domain.start);
   }
 
-  zoomClientToYear(event, metrics = this.measureZoomBar()) {
+  zoomClientToUnit(event, metrics = this.measureZoomBar()) {
     const rect = this.zoomBar.getBoundingClientRect();
-    return this.zoomAxisToYear(event.clientX - rect.left, metrics);
+    return this.zoomAxisToUnit(event.clientX - rect.left, metrics);
   }
 
   computeItems(metrics) {
@@ -1091,8 +1498,9 @@ export class TimelineView {
     const lod = this.getLod(span);
     const minSignificance = this.lodEnabled ? lod.minSignificance : 1;
     const activeClusterIds = this.getActiveClusterRecordIds();
+    const viewYears = this.getViewYearRange();
     const all = this.records
-      .filter((record) => record.__meta.end >= this.view.start && record.__meta.start <= this.view.end)
+      .filter((record) => record.__meta.end >= viewYears.start && record.__meta.start <= viewYears.end)
       .map((record) => ({
         record,
         axis: this.yearToAxis(record.__meta.start, metrics),
@@ -1102,7 +1510,10 @@ export class TimelineView {
         hovered: record.id === this.hoveredId,
         clusterHighlighted: activeClusterIds.has(record.id)
       }))
-      .filter((item) => item.axis > metrics.axisStart - 80 && item.axis < metrics.axisEnd + 80);
+      // Spans are kept when any part of them reaches the frame, so a long period
+      // that starts far off-screen (or behind a collapsed gap) still renders.
+      .filter((item) => Math.max(item.axis, item.endAxis) > metrics.axisStart - 80
+        && Math.min(item.axis, item.endAxis) < metrics.axisEnd + 80);
 
     const spacing = this.cardSpacingFor(lod.labelMode);
     const occupied = [];
@@ -1218,18 +1629,23 @@ export class TimelineView {
     const step = chooseTickStep(span, metrics.axisLength);
     const minorStep = step / 5;
     const axis = metrics.axisCoordinate;
+    const spans = this.timeScale.denseSpansForRange(this.view.start, this.view.end);
+    const project = (year) => this.yearToAxis(year, metrics);
+    const bands = this.breakBandRanges(metrics);
 
     ctx.save();
     ctx.lineWidth = 1;
     ctx.font = "11px var(--mono-font)";
     ctx.textBaseline = metrics.orientation === "horizontal" ? "top" : "middle";
 
-    drawTicks(ctx, metrics, this.view, minorStep, colors.grid, 0.28, null);
-    drawTicks(ctx, metrics, this.view, step, colors.grid, 0.55, (tick, axisPosition) => {
+    const labeler = (tick, axisPosition) => {
+      const label = formatYear(tick, this.language, this.t);
+      const reach = metrics.orientation === "horizontal" ? ctx.measureText(label).width / 2 + 5 : 9;
+      const hidden = bands.some((band) => axisPosition + reach > band.from - 4 && axisPosition - reach < band.to + 4);
+      if (hidden) return;
       ctx.save();
       ctx.fillStyle = colors.muted;
       ctx.globalAlpha = 0.82;
-      const label = formatYear(tick, this.language, this.t);
       if (metrics.orientation === "horizontal") {
         const labelY = axis + (metrics.placement === "side-end" ? -28 : 18);
         ctx.textAlign = "center";
@@ -1240,21 +1656,291 @@ export class TimelineView {
         ctx.fillText(label, labelX, axisPosition);
       }
       ctx.restore();
-    });
+    };
+
+    for (const denseSpan of spans) {
+      drawTicks(ctx, metrics, denseSpan, minorStep, colors.grid, 0.28, project, null);
+      drawTicks(ctx, metrics, denseSpan, step, colors.grid, 0.55, project, labeler);
+    }
 
     ctx.strokeStyle = colors.line;
     ctx.globalAlpha = 0.95;
     ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    if (metrics.orientation === "horizontal") {
-      ctx.moveTo(metrics.axisStart, axis);
-      ctx.lineTo(metrics.axisEnd, axis);
-    } else {
-      ctx.moveTo(axis, metrics.axisStart);
-      ctx.lineTo(axis, metrics.axisEnd);
+    for (const denseSpan of spans) {
+      const from = clamp(this.unitToAxis(denseSpan.unitStart, metrics), metrics.axisStart, metrics.axisEnd);
+      const to = clamp(this.unitToAxis(denseSpan.unitEnd, metrics), metrics.axisStart, metrics.axisEnd);
+      if (to - from < 0.5) continue;
+      ctx.beginPath();
+      if (metrics.orientation === "horizontal") {
+        ctx.moveTo(from, axis);
+        ctx.lineTo(to, axis);
+      } else {
+        ctx.moveTo(axis, from);
+        ctx.lineTo(axis, to);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
     ctx.restore();
+  }
+
+  breakBandRanges(metrics) {
+    if (!this.timeBreaksEnabled) return [];
+    return this.timeScale.breaksForRange(this.view.start, this.view.end).map((segment) => {
+      const start = this.unitToAxis(segment.startUnit, metrics);
+      const end = this.unitToAxis(segment.endUnit, metrics);
+      const center = (start + end) / 2;
+      const width = Math.max(end - start, MIN_BREAK_BAND_PX);
+      return { from: center - width / 2, to: center + width / 2 };
+    });
+  }
+
+  drawTimeBreaks(metrics, colors) {
+    this.lastBreaks = [];
+    if (!this.timeBreaksEnabled) return;
+    const entries = [
+      ...this.timeScale.breaksForRange(this.view.start, this.view.end).map((segment) => ({
+        kind: "collapsed",
+        id: segment.id,
+        startYear: segment.startYear,
+        endYear: segment.endYear,
+        years: Math.max(1, Math.round(segment.yearSpan - segment.unitSpan)),
+        startAxis: this.unitToAxis(segment.startUnit, metrics),
+        endAxis: this.unitToAxis(segment.endUnit, metrics)
+      })),
+      ...this.breakCatalog
+        .filter((entry) => this.expandedBreakIds.has(entry.id))
+        .map((entry) => ({
+          kind: "expanded",
+          id: entry.id,
+          startYear: entry.startYear,
+          endYear: entry.endYear,
+          years: Math.max(1, Math.round(entry.endYear - entry.startYear)),
+          startAxis: this.yearToAxis(entry.startYear, metrics),
+          endAxis: this.yearToAxis(entry.endYear, metrics)
+        }))
+    ];
+    if (!entries.length) return;
+
+    const horizontal = metrics.orientation === "horizontal";
+    const reach = clamp((horizontal ? metrics.height : metrics.width) * 0.3, 48, 190);
+    const obstacles = this.cardBoxes(metrics);
+
+    for (const entry of entries) {
+      const collapsed = entry.kind === "collapsed";
+      const center = (entry.startAxis + entry.endAxis) / 2;
+      const width = collapsed ? Math.max(entry.endAxis - entry.startAxis, MIN_BREAK_BAND_PX) : entry.endAxis - entry.startAxis;
+      const from = collapsed ? center - width / 2 : entry.startAxis;
+      const to = collapsed ? center + width / 2 : entry.endAxis;
+      if (to < metrics.axisStart - 16 || from > metrics.axisEnd + 16) continue;
+
+      const visibleFrom = Math.max(from, metrics.axisStart + 4);
+      const visibleTo = Math.min(to, metrics.axisEnd - 4);
+      const anchor = visibleTo > visibleFrom ? clamp(center, visibleFrom, visibleTo) : center;
+      const resolved = {
+        ...entry,
+        from,
+        to,
+        axis: anchor,
+        highlighted: entry.id === this.hoveredBreakId
+      };
+      resolved.label = this.breakChipLabel(resolved);
+      resolved.chip = this.placeBreakChip(metrics, resolved, obstacles);
+      obstacles.push(resolved.chip);
+      resolved.bbox = collapsed
+        ? horizontal
+          ? {
+              left: from - 9,
+              right: to + 9,
+              top: metrics.axisCoordinate - reach,
+              bottom: metrics.axisCoordinate + reach
+            }
+          : {
+              left: metrics.axisCoordinate - reach,
+              right: metrics.axisCoordinate + reach,
+              top: from - 9,
+              bottom: to + 9
+            }
+        : null;
+      this.drawBreakMark(metrics, colors, resolved);
+      this.lastBreaks.push(resolved);
+    }
+  }
+
+  /**
+   * Boxes the visible cards will occupy, so a break chip can dodge them. Cards are
+   * laid out after the canvas pass, so the placement is recomputed here instead of
+   * measuring the DOM, which would force a reflow on every frame.
+   */
+  cardBoxes(metrics) {
+    const mode = this.getLod(this.view.end - this.view.start).labelMode;
+    const compact = this.lodEnabled && (mode === "icon" || mode === "short");
+    return (this.lastItems?.display || []).map((item, index) => {
+      const placement = this.cardPlacement(metrics, item, index, compact);
+      const left = placement.shiftX === "-100%"
+        ? placement.x - placement.width
+        : placement.shiftX === "-50%"
+          ? placement.x - placement.width / 2
+          : placement.x;
+      const top = placement.y - placement.height / 2;
+      return { left, right: left + placement.width, top, bottom: top + placement.height };
+    });
+  }
+
+  placeBreakChip(metrics, entry, obstacles) {
+    const width = entry.label.length * 6.6 + 40;
+    const height = 27;
+    let position = this.breakLabelAnchor(metrics, entry, 0);
+    for (let rank = 1; rank <= 6 && obstacles.some((box) => boxOverlapsChip(box, position, width, height)); rank += 1) {
+      position = this.breakLabelAnchor(metrics, entry, rank);
+    }
+    return {
+      x: position.x,
+      y: position.y,
+      left: position.x - width / 2,
+      right: position.x + width / 2,
+      top: position.y - height / 2,
+      bottom: position.y + height / 2
+    };
+  }
+
+  renderBreakMarks() {
+    if (!this.breakLayer) return;
+    if (!this.lastBreaks.length) {
+      if (this.breakMarksKey) {
+        this.breakLayer.replaceChildren();
+        this.breakMarksKey = "";
+      }
+      return;
+    }
+
+    // Rebuild only when the set of breaks changes; position and highlight updates
+    // happen in place so panning and hovering never replace a node under the pointer.
+    const key = this.lastBreaks.map((entry) => `${entry.id}:${entry.kind}:${entry.label}`).join("|");
+    if (key !== this.breakMarksKey) {
+      this.breakMarksKey = key;
+      this.breakLayer.innerHTML = this.lastBreaks.map((entry) => {
+        const collapsed = entry.kind === "collapsed";
+        const description = `${this.t("timeBreakYears", { years: formatCount(entry.years, this.language) })} · ${this.t(collapsed ? "timeBreakHint" : "timeBreakCollapseHint")}`;
+        return `
+          <button class="histui-break-mark ${collapsed ? "is-collapsed" : "is-expanded"}" type="button" data-break-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(description)}" style="--x:${Math.round(entry.chip.x)}px;--y:${Math.round(entry.chip.y)}px;">
+            <span class="histui-break-glyph" aria-hidden="true">${collapsed ? "⌇" : "⤢"}</span>
+            <span>${escapeHtml(entry.label)}</span>
+          </button>
+        `;
+      }).join("");
+    }
+
+    for (const mark of this.breakLayer.children) {
+      const entry = this.lastBreaks.find((candidate) => candidate.id === mark.dataset.breakId);
+      if (!entry) continue;
+      mark.style.setProperty("--x", `${Math.round(entry.chip.x)}px`);
+      mark.style.setProperty("--y", `${Math.round(entry.chip.y)}px`);
+      mark.classList.toggle("is-hovered", entry.highlighted);
+    }
+  }
+
+  breakChipLabel(entry) {
+    const years = formatCompactCount(entry.years, this.language);
+    return entry.kind === "collapsed"
+      ? this.t("timeBreakSkipped", { years })
+      : this.t("timeBreakEmpty", { years });
+  }
+
+  drawBreakMark(metrics, colors, entry) {
+    const ctx = this.ctx;
+    const horizontal = metrics.orientation === "horizontal";
+    const axis = metrics.axisCoordinate;
+    const cross = horizontal ? metrics.height : metrics.width;
+    const collapsed = entry.kind === "collapsed";
+    const accent = entry.highlighted ? colors.accent2 : collapsed ? colors.line : colors.grid;
+    const fade = (color, peak) => crossFadeGradient(ctx, { horizontal, cross, axis, color, peak });
+    const band = (color) => {
+      ctx.fillStyle = color;
+      if (horizontal) ctx.fillRect(entry.from, 0, entry.to - entry.from, cross);
+      else ctx.fillRect(0, entry.from, cross, entry.to - entry.from);
+    };
+
+    ctx.save();
+    if (collapsed) {
+      band(fade(colors.background, 0.97));
+      band(fade(entry.highlighted ? colors.accent2 : colors.grid, entry.highlighted ? 0.2 : 0.12));
+    } else if (entry.highlighted) {
+      band(fade(colors.accent2, 0.08));
+    }
+
+    ctx.strokeStyle = fade(accent, entry.highlighted ? 0.95 : collapsed ? 0.7 : 0.45);
+    ctx.lineWidth = entry.highlighted ? 1.8 : 1.2;
+    ctx.lineJoin = "round";
+    if (collapsed) {
+      drawZigzag(ctx, { horizontal, edge: entry.from, cross, amplitude: 3.2, wave: 11 });
+      drawZigzag(ctx, { horizontal, edge: entry.to, cross, amplitude: 3.2, wave: 11 });
+    } else {
+      ctx.setLineDash([4, 6]);
+      for (const edge of [entry.from, entry.to]) {
+        if (edge < metrics.axisStart - 8 || edge > metrics.axisEnd + 8) continue;
+        ctx.beginPath();
+        if (horizontal) {
+          ctx.moveTo(edge, 0);
+          ctx.lineTo(edge, cross);
+        } else {
+          ctx.moveTo(0, edge);
+          ctx.lineTo(cross, edge);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    if (collapsed) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = entry.highlighted ? colors.accent2 : colors.accent4;
+      ctx.lineWidth = entry.highlighted ? 2.2 : 1.6;
+      const reach = 9;
+      ctx.beginPath();
+      if (horizontal) {
+        ctx.moveTo(entry.from, axis - reach);
+        ctx.lineTo(entry.from, axis + reach);
+        ctx.moveTo(entry.to, axis - reach);
+        ctx.lineTo(entry.to, axis + reach);
+      } else {
+        ctx.moveTo(axis - reach, entry.from);
+        ctx.lineTo(axis + reach, entry.from);
+        ctx.moveTo(axis - reach, entry.to);
+        ctx.lineTo(axis + reach, entry.to);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  breakLabelAnchor(metrics, entry, rank = 0) {
+    const axis = metrics.axisCoordinate;
+    const tier = Math.ceil(rank / 2);
+    const mirrored = rank % 2 === 1;
+    if (metrics.orientation === "horizontal") {
+      // Odd ranks mirror the chip across the axis, even ranks push it further out.
+      // Either way it stays on the band, which spans the whole frame.
+      const side = (metrics.placement === "side-end" ? 1 : -1) * (mirrored ? -1 : 1);
+      const distance = 32 + (mirrored ? tier - 1 : tier) * 30;
+      return {
+        x: clamp(entry.axis, 58, Math.max(58, metrics.width - 58)),
+        y: clamp(axis + side * distance, 16, Math.max(16, metrics.height - 16))
+      };
+    }
+    // Vertical layout keeps the chip on the axis itself: the axis is visibly cut
+    // there and the card lanes start further out, so nothing important is covered.
+    return {
+      x: clamp(axis, 46, Math.max(46, metrics.width - 46)),
+      y: clamp(entry.axis + (mirrored ? -1 : 1) * tier * 30, 14, Math.max(14, metrics.height - 14))
+    };
+  }
+
+  toggleTimeBreak(breakId) {
+    if (!breakId || !this.breakCatalog.some((entry) => entry.id === breakId)) return;
+    if (this.expandedBreakIds.has(breakId)) this.expandedBreakIds.delete(breakId);
+    else this.expandedBreakIds.add(breakId);
+    this.hoveredBreakId = null;
+    this.rebuildTimeScale({ animate: true });
   }
 
   drawSpans(metrics, colors, items) {
@@ -1519,6 +2205,36 @@ export class TimelineView {
     this.clusterTooltip.hidden = false;
   }
 
+  renderBreakTooltip(metrics) {
+    const entry = this.lastBreaks.find((candidate) => candidate.id === this.hoveredBreakId);
+    if (!entry) {
+      this.breakTooltip.hidden = true;
+      return;
+    }
+
+    const collapsed = entry.kind === "collapsed";
+    const range = `${formatYear(entry.startYear, this.language, this.t)} - ${formatYear(entry.endYear, this.language, this.t)}`;
+    this.breakTooltip.innerHTML = `
+      <strong>${escapeHtml(this.t(collapsed ? "timeBreakTitle" : "timeBreakOpenTitle"))}</strong>
+      <ul>
+        <li>${escapeHtml(this.t("timeBreakYears", { years: formatCount(entry.years, this.language) }))}</li>
+        <li>${escapeHtml(range)}</li>
+      </ul>
+      <span>${escapeHtml(this.t(collapsed ? "timeBreakHint" : "timeBreakCollapseHint"))}</span>
+    `;
+
+    const chip = entry.chip || { left: entry.axis, right: entry.axis, top: 0, bottom: 0 };
+    const centerX = (chip.left + chip.right) / 2;
+    const centerY = (chip.top + chip.bottom) / 2;
+    const left = clamp(centerX, 128, Math.max(128, metrics.width - 128));
+    const placeBelow = centerY < 132;
+    const top = placeBelow ? centerY + 22 : centerY - 16;
+    this.breakTooltip.style.left = `${left}px`;
+    this.breakTooltip.style.top = `${top}px`;
+    this.breakTooltip.dataset.placement = placeBelow ? "below" : "above";
+    this.breakTooltip.hidden = false;
+  }
+
   renderMeasurementLine(metrics) {
     if (!this.measurementLine || !this.measurementLabel) return;
     const measurement = this.getMeasurementConfig();
@@ -1529,7 +2245,8 @@ export class TimelineView {
       return;
     }
 
-    const span = Math.max(1, Math.round(this.view.end - this.view.start));
+    const viewYears = this.getViewYearRange();
+    const span = Math.max(1, Math.round(viewYears.end - viewYears.start));
     this.measurementLabel.textContent = this.t("zoomLevel", { span });
     this.measurementLine.dataset.orientation = metrics.orientation;
     this.measurementLine.hidden = false;
@@ -1852,14 +2569,19 @@ export class TimelineView {
   }
 
   renderHint(metrics, items) {
-    const span = Math.max(1, Math.round(this.view.end - this.view.start));
+    const viewYears = this.getViewYearRange();
+    const span = Math.max(1, Math.round(viewYears.end - viewYears.start));
+    const collapsed = this.lastBreaks.filter((entry) => entry.kind === "collapsed").length;
     const status = this.t("statusReady", {
       visible: items.display.length,
       hidden: items.hidden.length
     }) + ` · ${this.t("zoomLevel", { span })}`;
-    this.hint.textContent = this.expandedCluster
+    const breakNote = collapsed
+      ? ` · ${this.t(collapsed === 1 ? "timeBreakStatusOne" : "timeBreakStatus", { count: collapsed })}`
+      : "";
+    this.hint.textContent = (this.expandedCluster
       ? `${this.t("clusterExpanded", { count: this.expandedCluster.recordIds.length })} · ${status}`
-      : status;
+      : status) + breakNote;
   }
 
   readColors() {
@@ -1870,6 +2592,7 @@ export class TimelineView {
       muted: styles.getPropertyValue("--muted").trim(),
       line: styles.getPropertyValue("--line").trim(),
       grid: styles.getPropertyValue("--grid").trim(),
+      panel: styles.getPropertyValue("--panel").trim(),
       surfaceRaised: styles.getPropertyValue("--surface-raised").trim(),
       accent: styles.getPropertyValue("--accent").trim(),
       accent2: styles.getPropertyValue("--accent2").trim(),
@@ -1950,7 +2673,20 @@ export class TimelineView {
 
     candidates.sort((a, b) => a.distance - b.distance || b.item.importance - a.item.importance);
     const hit = candidates[0]?.item;
-    return hit ? { record: hit.record, item: hit } : null;
+    if (hit) return { record: hit.record, item: hit };
+
+    for (const entry of this.lastBreaks) {
+      if (
+        entry.bbox &&
+        point.x >= entry.bbox.left &&
+        point.x <= entry.bbox.right &&
+        point.y >= entry.bbox.top &&
+        point.y <= entry.bbox.bottom
+      ) {
+        return { break: entry };
+      }
+    }
+    return null;
   }
 
   expandCluster(cluster) {
@@ -1977,6 +2713,8 @@ export class TimelineView {
     if (this.explodeAnimationTimer) window.clearTimeout(this.explodeAnimationTimer);
     if (this.measurementFadeTimer) window.clearTimeout(this.measurementFadeTimer);
     this.clusterTooltip?.remove();
+    this.breakTooltip?.remove();
+    this.breakLayer?.remove();
     this.measurementLine?.remove();
     this.animationFrame = 0;
     this.viewportAnimationFrame = 0;
@@ -2044,8 +2782,93 @@ function colorMixFallback(primary, fallback) {
   return primary || fallback;
 }
 
+function crossFadeGradient(ctx, { horizontal, cross, axis, color, peak }) {
+  const gradient = horizontal
+    ? ctx.createLinearGradient(0, 0, 0, cross)
+    : ctx.createLinearGradient(0, 0, cross, 0);
+  const plateau = cross * 0.34;
+  const edge = cross * 0.86;
+  const at = (pixels) => clamp(pixels / Math.max(1, cross), 0, 1);
+  const stops = [
+    [at(axis - edge), 0],
+    [at(axis - plateau), peak],
+    [at(axis), peak],
+    [at(axis + plateau), peak],
+    [at(axis + edge), 0]
+  ];
+  let previous = -1;
+  for (const [offset, alpha] of stops) {
+    const position = Math.max(offset, previous);
+    gradient.addColorStop(position, withAlpha(color, alpha));
+    previous = position;
+  }
+  return gradient;
+}
+
+function boxOverlapsChip(box, position, width, height) {
+  return (
+    Math.abs(box.left + box.right - 2 * position.x) < width + (box.right - box.left) &&
+    Math.abs(box.top + box.bottom - 2 * position.y) < height + (box.bottom - box.top) + 4
+  );
+}
+
+function drawZigzag(ctx, { horizontal, edge, cross, amplitude, wave }) {
+  const steps = Math.max(4, Math.round(cross / wave));
+  const step = cross / steps;
+  ctx.beginPath();
+  for (let index = 0; index <= steps; index += 1) {
+    const along = index * step;
+    const offset = index % 2 === 0 ? -amplitude : amplitude;
+    const x = horizontal ? edge + offset : along;
+    const y = horizontal ? along : edge + offset;
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function withAlpha(color, alpha) {
+  const value = String(color || "").trim();
+  const safeAlpha = clamp(alpha, 0, 1);
+  const hex = value.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const digits = hex[1].length === 3 ? hex[1].split("").map((digit) => digit + digit).join("") : hex[1];
+    const red = Number.parseInt(digits.slice(0, 2), 16);
+    const green = Number.parseInt(digits.slice(2, 4), 16);
+    const blue = Number.parseInt(digits.slice(4, 6), 16);
+    return `rgba(${red}, ${green}, ${blue}, ${safeAlpha})`;
+  }
+  const rgb = value.match(/^rgba?\(([^)]+)\)$/i);
+  if (rgb) {
+    const parts = rgb[1].split(/[,/\s]+/).filter(Boolean).slice(0, 3);
+    if (parts.length === 3) return `rgba(${parts.join(", ")}, ${safeAlpha})`;
+  }
+  return value;
+}
+
+function formatCount(value, language = "en") {
+  try {
+    return new Intl.NumberFormat(language).format(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatCompactCount(value, language = "en") {
+  if (value < 1000) return formatCount(value, language);
+  try {
+    return new Intl.NumberFormat(language, { notation: "compact", maximumFractionDigits: 1 }).format(value);
+  } catch {
+    return formatCount(value, language);
+  }
+}
+
 function easeOutCubic(value) {
   return 1 - Math.pow(1 - value, 3);
+}
+
+function easeInOutCubic(value) {
+  return value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
 }
 
 function normalizeWheelDelta(event) {
@@ -2064,17 +2887,17 @@ function chooseTickStep(span, pixels) {
   return multiples.find((multiple) => raw <= multiple * power) * power;
 }
 
-function drawTicks(ctx, metrics, view, step, color, alpha, labeler) {
+function drawTicks(ctx, metrics, denseSpan, step, color, alpha, project, labeler) {
   if (!Number.isFinite(step) || step <= 0) return;
-  const first = Math.ceil(view.start / step) * step;
+  const first = Math.ceil(denseSpan.yearStart / step) * step;
   const axis = metrics.axisCoordinate;
   ctx.save();
   ctx.strokeStyle = color;
   ctx.globalAlpha = alpha;
   ctx.lineWidth = 1;
 
-  for (let tick = first; tick <= view.end + step * 0.5; tick += step) {
-    const axisPosition = metrics.axisStart + ((tick - view.start) / (view.end - view.start)) * metrics.axisLength;
+  for (let tick = first; tick <= denseSpan.yearEnd + step * 1e-6; tick += step) {
+    const axisPosition = project(tick);
     if (axisPosition < metrics.axisStart - 2 || axisPosition > metrics.axisEnd + 2) continue;
     ctx.beginPath();
     if (metrics.orientation === "horizontal") {

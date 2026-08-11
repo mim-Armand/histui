@@ -18,11 +18,23 @@ export interface HistuiMeasurementConfig {
   offsetPx?: number;
 }
 
+export interface HistuiTimeBreakConfig {
+  enabled?: boolean;
+  minGapRatio?: number;
+  minGapYears?: number;
+  collapsedRatio?: number;
+  contextRatio?: number;
+  maxBreaks?: number;
+  zoomSyncRatio?: number;
+}
+
 export interface HistuiTimelineConfig {
   minZoomSpanYears?: number;
   maxZoomMultiplier?: number;
   defaultPaddingRatio?: number;
+  keyboardStepMs?: number;
   measurement?: HistuiMeasurementConfig;
+  timeBreaks?: HistuiTimeBreakConfig;
   [key: string]: unknown;
 }
 
@@ -65,11 +77,18 @@ export interface HistuiFilters {
 export interface HistuiViewport {
   orientation: "horizontal" | "vertical";
   placement: HistuiAxisPlacement;
+  start: number;
+  end: number;
   span: number;
+  compressedSpan: number;
   visible: number;
   hidden: number;
   total: number;
   lod: unknown;
+  timeBreaksEnabled: boolean;
+  breaks: number;
+  breakCount: number;
+  skippedYears: number;
 }
 
 export interface HistuiTimelineOptions<RecordType = any> {
@@ -98,6 +117,8 @@ export interface HistuiTimelineOptions<RecordType = any> {
   };
   lodEnabled?: boolean;
   explodeEnabled?: boolean;
+  timeBreaksEnabled?: boolean;
+  timeBreaks?: HistuiTimeBreakConfig;
   measurement?: HistuiMeasurementConfig;
   analytics?: {
     measurementId?: string;
@@ -127,6 +148,8 @@ export interface HistuiState<RecordType = any> {
   };
   lodEnabled: boolean;
   explodeEnabled: boolean;
+  timeBreaksEnabled: boolean;
+  timeBreaks: HistuiTimeBreakConfig;
   measurement: HistuiMeasurementConfig;
 }
 
@@ -137,13 +160,17 @@ export class HistuiTimeline<RecordType = any> {
   setFilters(filters: HistuiFilters, options?: { preserveView?: boolean }): this;
   resetFilters(options?: { preserveView?: boolean }): this;
   select(recordId: string, options?: { emit?: boolean }): this;
+  focusRecord(recordId: string, options?: { animate?: boolean; emit?: boolean }): this;
+  stepSelection(direction?: number): this;
   fit(options?: { animate?: boolean }): this;
   zoomBy(factor: number): this;
-  setViewRange(start: number, end: number, options?: Record<string, unknown>): this;
+  setViewRange(startYear: number, endYear: number, options?: Record<string, unknown>): this;
   setOrientation(orientation: HistuiOrientation): this;
   setAxisPlacement(orientation: "horizontal" | "vertical", placement: HistuiAxisPlacement): this;
   setLodEnabled(enabled: boolean): this;
   setExplodeEnabled(enabled: boolean): this;
+  setTimeBreaksEnabled(enabled: boolean): this;
+  setTimeBreakOptions(options: HistuiTimeBreakConfig): this;
   setMeasurementOptions(options: HistuiMeasurementConfig): this;
   setMeasurementEnabled(enabled: boolean): this;
   setDisplayMode(displayMode: HistuiDisplayMode): this;
@@ -154,6 +181,43 @@ export class HistuiTimeline<RecordType = any> {
   getState(): HistuiState<RecordType>;
   destroy(): void;
 }
+
+export interface HistuiTimeScaleSegment {
+  kind: "dense" | "break";
+  id: string;
+  startYear: number;
+  endYear: number;
+  yearSpan: number;
+  startUnit: number;
+  endUnit: number;
+  unitSpan: number;
+  scale: number;
+}
+
+export class TimeScale {
+  constructor(domain: { start: number; end: number }, breaks?: Array<{ startYear: number; endYear: number; unitSpan: number }>);
+  static identity(domain: { start: number; end: number }): TimeScale;
+  readonly domain: { start: number; end: number };
+  readonly segments: HistuiTimeScaleSegment[];
+  readonly breaks: HistuiTimeScaleSegment[];
+  readonly span: number;
+  readonly hasBreaks: boolean;
+  readonly skippedYears: number;
+  readonly unitDomain: { start: number; end: number };
+  toUnit(year: number): number;
+  toYear(unit: number): number;
+  denseSpansForRange(unitStart: number, unitEnd: number): Array<{ unitStart: number; unitEnd: number; yearStart: number; yearEnd: number }>;
+  breaksForRange(unitStart: number, unitEnd: number): HistuiTimeScaleSegment[];
+}
+
+export function buildTimeScale(
+  records: any[],
+  domain: { start: number; end: number },
+  options?: HistuiTimeBreakConfig,
+  context?: { viewSpan?: number }
+): TimeScale;
+export function normalizeTimeBreakOptions(options?: HistuiTimeBreakConfig): Required<HistuiTimeBreakConfig>;
+export const DEFAULT_TIME_BREAK_OPTIONS: Required<HistuiTimeBreakConfig>;
 
 export function createHistuiTimeline<RecordType = any>(options: HistuiTimelineOptions<RecordType>): HistuiTimeline<RecordType>;
 export function normalizeTimelineData(data: unknown, datasetConfig?: Record<string, unknown>): unknown;

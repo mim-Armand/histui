@@ -17,6 +17,12 @@ export { DEFAULT_HISTUI_CONFIG } from "./default-config.js";
 export { createDefaultFilters, filterRecords, getDatasetBounds, normalizeFilters } from "./filters.js";
 export { dirForLanguage, makeTranslator, UI_STRINGS } from "./i18n.js";
 export * from "./paststruct.js";
+export {
+  DEFAULT_TIME_BREAK_OPTIONS,
+  TimeScale,
+  buildTimeScale,
+  normalizeTimeBreakOptions
+} from "./time-scale.js";
 export { TimelineView } from "./timeline-view.js";
 export { applyTheme, getTheme, localizedThemeLabel } from "./theme.js";
 
@@ -51,6 +57,11 @@ export class HistuiTimeline {
     };
     this.lodEnabled = options.lodEnabled ?? (this.config.timeline?.lod?.enabled !== false);
     this.explodeEnabled = options.explodeEnabled ?? (this.config.timeline?.explode?.enabled === true);
+    if (options.timeBreaks) {
+      this.config.timeline = this.config.timeline || {};
+      this.config.timeline.timeBreaks = mergeConfig(this.config.timeline.timeBreaks || {}, options.timeBreaks);
+    }
+    this.timeBreaksEnabled = options.timeBreaksEnabled ?? (this.config.timeline?.timeBreaks?.enabled === true);
     this.dataset = null;
     this.records = [];
     this.filteredRecords = [];
@@ -124,6 +135,7 @@ export class HistuiTimeline {
     this.timeline.setAxisPlacement("vertical", this.axisPlacement.vertical);
     this.timeline.setLodEnabled(this.lodEnabled);
     this.timeline.setExplodeEnabled(this.explodeEnabled);
+    this.timeline.setTimeBreaksEnabled(this.timeBreaksEnabled);
     this.renderControls();
   }
 
@@ -191,6 +203,17 @@ export class HistuiTimeline {
     return this;
   }
 
+  focusRecord(recordId, options) {
+    this.timeline.focusRecord(recordId, { emit: true, ...options });
+    return this;
+  }
+
+  stepSelection(direction = 1) {
+    const record = this.timeline.stepRecord(direction);
+    if (record) this.track("timeline_action", { action: direction >= 0 ? "step-next" : "step-previous" });
+    return this;
+  }
+
   fit(options) {
     this.timeline.fit(options);
     return this;
@@ -201,8 +224,8 @@ export class HistuiTimeline {
     return this;
   }
 
-  setViewRange(start, end, options) {
-    this.timeline.setViewRange(start, end, options);
+  setViewRange(startYear, endYear, options) {
+    this.timeline.setViewYearRange(startYear, endYear, options);
     return this;
   }
 
@@ -235,6 +258,24 @@ export class HistuiTimeline {
     this.timeline.setExplodeEnabled(this.explodeEnabled);
     this.renderControls();
     this.track("timeline_setting_change", { setting: "explode", value: this.explodeEnabled });
+    return this;
+  }
+
+  setTimeBreaksEnabled(enabled) {
+    this.timeBreaksEnabled = Boolean(enabled);
+    this.timeline.setTimeBreaksEnabled(this.timeBreaksEnabled);
+    this.renderControls();
+    this.track("timeline_setting_change", { setting: "time-breaks", value: this.timeBreaksEnabled });
+    return this;
+  }
+
+  setTimeBreakOptions(options = {}) {
+    this.config.timeline = this.config.timeline || {};
+    this.config.timeline.timeBreaks = mergeConfig(this.config.timeline.timeBreaks || {}, options);
+    this.timeBreaksEnabled = this.config.timeline.timeBreaks.enabled === true;
+    this.timeline.setTimeBreakOptions(this.config.timeline.timeBreaks);
+    this.renderControls();
+    this.track("timeline_setting_change", { setting: "time-breaks", value: { ...this.config.timeline.timeBreaks } });
     return this;
   }
 
@@ -313,6 +354,8 @@ export class HistuiTimeline {
       axisPlacement: { ...this.axisPlacement },
       lodEnabled: this.lodEnabled,
       explodeEnabled: this.explodeEnabled,
+      timeBreaksEnabled: this.timeBreaksEnabled,
+      timeBreaks: { ...(this.config.timeline?.timeBreaks || {}), enabled: this.timeBreaksEnabled },
       measurement: { ...(this.config.timeline?.measurement || {}) }
     };
   }
@@ -357,6 +400,7 @@ export class HistuiTimeline {
     if (name === "axis-vertical") this.setAxisPlacement("vertical", control.value);
     if (name === "lod") this.setLodEnabled(control.checked);
     if (name === "explode") this.setExplodeEnabled(control.checked);
+    if (name === "time-breaks") this.setTimeBreaksEnabled(control.checked);
   }
 
   renderControls() {
@@ -409,6 +453,10 @@ export class HistuiTimeline {
         <label class="histui-toggle-pill">
           <input type="checkbox" data-histui-control="explode"${this.explodeEnabled ? " checked" : ""}>
           <span>${escapeHtml(this.t("explode"))}</span>
+        </label>
+        <label class="histui-toggle-pill" title="${escapeHtml(this.t("timeBreaksHint"))}">
+          <input type="checkbox" data-histui-control="time-breaks"${this.timeBreaksEnabled ? " checked" : ""}>
+          <span>${escapeHtml(this.t("timeBreaks"))}</span>
         </label>
         <span class="histui-viewport-chip">${escapeHtml(this.t("zoomLevel", { span: spanYears }))}</span>
       </div>

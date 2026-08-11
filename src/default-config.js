@@ -35,6 +35,16 @@ export const DEFAULT_HISTUI_CONFIG = {
       transient: false,
       fadeOutMs: 1200
     },
+    timeBreaks: {
+      enabled: false,
+      minGapRatio: 0.12,
+      minGapYears: 0,
+      collapsedRatio: 0.022,
+      contextRatio: 0.12,
+      maxBreaks: 240,
+      zoomSyncRatio: 0.18
+    },
+    keyboardStepMs: 460,
     lod: {
       enabled: true,
       thresholds: [

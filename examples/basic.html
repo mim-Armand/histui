@@ -35,6 +35,26 @@
         },
         records: [
           {
+            id: "event-0",
+            recordType: "event",
+            type: "cultural",
+            label: { en: "Ancient Marker", fa: "نشانه باستانی" },
+            description: { en: "A very old event, far away from the rest of the dataset." },
+            emoji: "☥",
+            temporal: { dates: [{ rank: 1, confidence: "probable", date: { from: "-2600" } }] },
+            significance: { value: 9, scale: 10, scope: "global" }
+          },
+          {
+            id: "period-0",
+            recordType: "period",
+            type: "cultural",
+            label: { en: "Classical Era", fa: "دوره کلاسیک" },
+            description: { en: "A period separated from the modern records by a long empty stretch." },
+            emoji: "⌂",
+            temporal: { dates: [{ rank: 1, confidence: "probable", date: { from: "-0480", to: "-0320" } }] },
+            significance: { value: 8, scale: 10, scope: "global" }
+          },
+          {
             id: "event-1",
             recordType: "event",
             type: "political",
@@ -63,11 +83,22 @@
             emoji: "✦",
             temporal: { dates: [{ rank: 1, confidence: "certain", date: { from: "1979-02-11" } }] },
             significance: { value: 9, scale: 10, scope: "global" }
+          },
+          {
+            id: "event-3",
+            recordType: "event",
+            type: "technological",
+            label: { en: "Recent Milestone", fa: "نقطه اخیر" },
+            description: { en: "A recent event that keeps the modern cluster dense." },
+            emoji: "✷",
+            temporal: { dates: [{ rank: 1, confidence: "certain", date: { from: "2011-03-11" } }] },
+            significance: { value: 7, scale: 10, scope: "regional" }
           }
         ]
       };
 
-      createHistuiTimeline({
+      // Exposed so the demo can be driven from the console: histuiDemo.stepSelection(1)
+      window.histuiDemo = createHistuiTimeline({
         container: "#timeline",
         data,
         measurement: {
@@ -76,6 +107,7 @@
           fadeOutMs: 1200
         },
         explodeEnabled: true,
+        timeBreaksEnabled: true,
         onSelect(record) {
           console.log("Selected", record.id);
         }
