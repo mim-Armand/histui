@@ -23,6 +23,8 @@ export type HistuiTimeBreakLabel = "gap" | "removed" | "both" | "range" | "none"
 export interface HistuiTimeBreakConfig {
   enabled?: boolean;
   label?: HistuiTimeBreakLabel;
+  /** Also cut stretches a single record runs across, such as a long quiet period. */
+  breakOngoing?: boolean;
   minGapRatio?: number;
   minGapYears?: number;
   collapsedRatio?: number;
@@ -195,6 +197,8 @@ export interface HistuiTimeScaleSegment {
   gapStartYear: number;
   gapEndYear: number;
   gapYears: number;
+  /** True when a record runs across the break instead of the years being empty. */
+  ongoing: boolean;
   startUnit: number;
   endUnit: number;
   unitSpan: number;
@@ -208,6 +212,7 @@ export interface HistuiTimeBreakEntry {
   unitSpan: number;
   gapStartYear?: number;
   gapEndYear?: number;
+  ongoing?: boolean;
 }
 
 export class TimeScale {

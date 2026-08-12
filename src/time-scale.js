@@ -5,6 +5,7 @@ export const TIME_BREAK_LABELS = ["gap", "removed", "both", "range", "none"];
 export const DEFAULT_TIME_BREAK_OPTIONS = {
   enabled: false,
   label: "gap",
+  breakOngoing: true,
   minGapRatio: 0.12,
   minGapYears: 0,
   collapsedRatio: 0.022,
@@ -18,6 +19,7 @@ export function normalizeTimeBreakOptions(options = {}) {
   return {
     enabled: options.enabled === true,
     label: TIME_BREAK_LABELS.includes(options.label) ? options.label : DEFAULT_TIME_BREAK_OPTIONS.label,
+    breakOngoing: options.breakOngoing !== false,
     minGapRatio: clamp(numberOr(options.minGapRatio, DEFAULT_TIME_BREAK_OPTIONS.minGapRatio), 0.01, 0.9),
     minGapYears: Math.max(0, numberOr(options.minGapYears, DEFAULT_TIME_BREAK_OPTIONS.minGapYears)),
     collapsedRatio: clamp(numberOr(options.collapsedRatio, DEFAULT_TIME_BREAK_OPTIONS.collapsedRatio), 0.002, 0.2),
@@ -32,8 +34,8 @@ export function normalizeTimeBreakOptions(options = {}) {
  *
  * Dense segments keep a 1:1 year-to-unit scale, so every existing viewport
  * calculation (zoom span, tick steps, level of detail) keeps working in years.
- * Break segments squeeze an empty year range into a much smaller unit range,
- * which is what removes the long empty stretches from the timeline.
+ * Break segments squeeze a quiet year range into a much smaller unit range,
+ * which is what removes the long uneventful stretches from the timeline.
  */
 export class TimeScale {
   constructor(domain, breaks = []) {
@@ -59,7 +61,8 @@ export class TimeScale {
       const segment = this.pushSegmentEntry("break", breakStart, breakEnd, unit, unitSpan, {
         id: entry.id,
         gapStartYear: entry.gapStartYear,
-        gapEndYear: entry.gapEndYear
+        gapEndYear: entry.gapEndYear,
+        ongoing: entry.ongoing
       });
       unit = segment.endUnit;
       cursor = breakEnd;
@@ -86,7 +89,7 @@ export class TimeScale {
   pushSegmentEntry(kind, startYear, endYear, startUnit, unitSpan, meta = {}) {
     const yearSpan = endYear - startYear;
     // A break keeps a little context on each side, so the segment is shorter than the
-    // empty stretch it stands for; both spans are kept because labels can report either.
+    // quiet stretch it stands for; both spans are kept because labels can report either.
     const gapStartYear = Number.isFinite(meta.gapStartYear) ? meta.gapStartYear : startYear;
     const gapEndYear = Number.isFinite(meta.gapEndYear) ? meta.gapEndYear : endYear;
     const segment = {
@@ -98,6 +101,9 @@ export class TimeScale {
       gapStartYear,
       gapEndYear,
       gapYears: gapEndYear - gapStartYear,
+      // True when a record runs across the cut, so the break shortens a period instead
+      // of standing for time nothing happened in.
+      ongoing: meta.ongoing === true,
       startUnit,
       endUnit: startUnit + unitSpan,
       unitSpan,
@@ -213,26 +219,13 @@ export function buildTimeScale(records, domain, options = {}, { viewSpan } = {})
   const domainSpan = domain.end - domain.start;
   if (!(domainSpan > 0)) return identity;
 
-  const intervals = coverageIntervals(records);
-  if (intervals.length < 2) return identity;
-
   const frame = Number.isFinite(viewSpan) && viewSpan > 0 ? Math.min(viewSpan, domainSpan) : domainSpan;
   const minGapYears = Math.max(settings.minGapYears, frame * settings.minGapRatio);
-  const gaps = [];
-  for (let index = 1; index < intervals.length; index += 1) {
-    const startYear = intervals[index - 1].end;
-    const endYear = intervals[index].start;
-    const years = endYear - startYear;
-    // The id names the gap itself, not the collapsed segment, so it survives the
-    // rebuilds that follow every zoom change and keeps expanded gaps expanded.
-    if (years >= minGapYears) {
-      gaps.push({ id: `gap:${Math.round(startYear)}:${Math.round(endYear)}`, startYear, endYear, years });
-    }
-  }
+  const gaps = quietStretches(records, minGapYears)
+    .filter((stretch) => settings.breakOngoing || !stretch.ongoing);
   if (!gaps.length) return identity;
 
   const selected = gaps
-    .slice()
     .sort((a, b) => b.years - a.years)
     .slice(0, settings.maxBreaks)
     .sort((a, b) => a.startYear - b.startYear);
@@ -253,7 +246,8 @@ export function buildTimeScale(records, domain, options = {}, { viewSpan } = {})
       endYear,
       unitSpan,
       gapStartYear: gap.startYear,
-      gapEndYear: gap.endYear
+      gapEndYear: gap.endYear,
+      ongoing: gap.ongoing
     });
   }
   if (!breaks.length) return identity;
@@ -262,24 +256,53 @@ export function buildTimeScale(records, domain, options = {}, { viewSpan } = {})
   return scale.hasBreaks ? scale : identity;
 }
 
-function coverageIntervals(records) {
+/**
+ * Stretches of the axis where nothing starts and nothing ends, which are the only
+ * places a break may go. A record running across such a stretch does not disqualify
+ * it: a period of a thousand quiet years still forces the viewer to scroll from its
+ * start to its end. Those stretches are reported as `ongoing` so the caller can cut
+ * them while the record itself keeps running through the cut.
+ */
+function quietStretches(records, minYears) {
   const ranges = [];
+  const marks = new Set();
   for (const record of records) {
     const start = record?.__meta?.start;
     if (!Number.isFinite(start)) continue;
     const end = record.__meta.end;
-    ranges.push({ start, end: Number.isFinite(end) ? Math.max(end, start) : start });
+    const range = { start, end: Number.isFinite(end) ? Math.max(end, start) : start };
+    ranges.push(range);
+    marks.add(range.start);
+    marks.add(range.end);
   }
-  ranges.sort((a, b) => a.start - b.start);
+  if (marks.size < 2) return [];
 
-  const merged = [];
-  for (const range of ranges) {
-    const current = merged[merged.length - 1];
-    if (current && range.start <= current.end) {
-      current.end = Math.max(current.end, range.end);
-      continue;
+  ranges.sort((a, b) => a.start - b.start);
+  const anchors = [...marks].sort((a, b) => a - b);
+
+  const stretches = [];
+  let index = 0;
+  // How far the records that have already started reach. Every end is an anchor too, so
+  // this either stops at the start of a stretch or clears it whole, which is exactly the
+  // difference between an empty gap and one a record runs through.
+  let reach = -Infinity;
+  for (let anchor = 0; anchor < anchors.length - 1; anchor += 1) {
+    const startYear = anchors[anchor];
+    const endYear = anchors[anchor + 1];
+    while (index < ranges.length && ranges[index].start <= startYear) {
+      reach = Math.max(reach, ranges[index].end);
+      index += 1;
     }
-    merged.push({ ...range });
+    if (endYear - startYear < minYears) continue;
+    stretches.push({
+      // The id names the stretch itself, not the collapsed segment, so it survives the
+      // rebuilds that follow every zoom change and keeps expanded gaps expanded.
+      id: `gap:${Math.round(startYear)}:${Math.round(endYear)}`,
+      startYear,
+      endYear,
+      years: endYear - startYear,
+      ongoing: reach >= endYear
+    });
   }
-  return merged;
+  return stretches;
 }

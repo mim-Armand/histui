@@ -53,7 +53,7 @@ Run the package directly from this repository when you want to develop `histui` 
 npm run dev
 ```
 
-Open [http://127.0.0.1:5175](http://127.0.0.1:5175). The dev server serves `examples/basic.html`, which imports `../src/index.js` and `../src/styles.css`, so it always uses the local package source instead of a published build. Its dataset leaves two long empty stretches, and a strip above the timeline picks the [break label](#time-breaks) so every mode can be compared against the built-in `Skip empty time` toggle.
+Open [http://127.0.0.1:5175](http://127.0.0.1:5175). The dev server serves `examples/basic.html`, which imports `../src/index.js` and `../src/styles.css`, so it always uses the local package source instead of a published build. Its dataset leaves two long empty stretches and one nine-century period with nothing inside it, and a strip above the timeline picks the [break label](#time-breaks) so every mode can be compared against the built-in `Skip empty time` toggle.
 
 Changes in `src/`, `examples/`, `README.md`, `PUBLISHING.md`, or `package.json` trigger an automatic browser reload. The server disables caching so style and JavaScript edits show up on the next reload without extra build steps.
 
@@ -186,6 +186,8 @@ createHistuiTimeline({
 
 Datasets that mix antiquity with the modern era leave huge empty stretches on a linear axis, so reaching the next record means panning through centuries of nothing. Time breaks collapse those empty stretches into short marked segments, which keeps the records spread across the frame at every zoom level.
 
+A break goes wherever nothing starts and nothing ends for long enough. That includes the inside of a single long record: a period of a thousand quiet years is just as much panning as an empty one, so the axis is cut there too and the record's own line keeps running across the cut, which is what shows it never ended. Those cuts are marked as ongoing, they say `quiet` rather than `gap`, and their band is left transparent so the line stays visible. Set `breakOngoing: false` to cut only where the axis is truly empty.
+
 ```js
 const histui = createHistuiTimeline({
   container: "#timeline",
@@ -203,7 +205,7 @@ The built-in controls include a `Skip empty time` toggle. Each collapsed gap is 
 
 | `label` | Chip | Reads |
 | --- | --- | --- |
-| `"gap"` | `2,220 yr gap` | Time between the records on either side: from where the earlier one ends to where the later one starts. |
+| `"gap"` | `2,220 yr gap` | Time between the records on either side: from where the earlier one ends to where the later one starts. Reads `2,220 yr quiet` when a record runs across the cut. |
 | `"removed"` | `~2,186 yr` | Time taken off the axis, which is a little shorter because a break keeps some context and the collapsed band still occupies a sliver. |
 | `"both"` | `~2,186 of 2,220 yr` | Both. |
 | `"range"` | `321 BCE - 1900 CE` | Where the cut sits, rather than how long it is. |
@@ -219,6 +221,7 @@ Behaviour is tuned through `config.timeline.timeBreaks`:
 | --- | --- | --- |
 | `enabled` | `false` | Collapse empty time by default. |
 | `label` | `"gap"` | What each chip reports: `"gap"`, `"removed"`, `"both"`, `"range"`, or `"none"`. |
+| `breakOngoing` | `true` | Also cut quiet stretches a record runs across, such as the middle of a long period. |
 | `minGapRatio` | `0.12` | Minimum gap size, as a fraction of the visible span, before it can be collapsed. |
 | `minGapYears` | `0` | Absolute floor in years for a collapsible gap. |
 | `collapsedRatio` | `0.022` | Width each collapsed gap keeps, as a fraction of the visible span. |
@@ -226,7 +229,7 @@ Behaviour is tuned through `config.timeline.timeBreaks`:
 | `maxBreaks` | `240` | Largest number of gaps to collapse; the widest gaps win. |
 | `zoomSyncRatio` | `0.18` | How far the zoom must move before the axis is re-cut. Larger values re-cut less often. |
 
-Gaps are computed from the merged coverage of the filtered records, so a long period spanning a quiet stretch prevents a break there. A re-cut keeps the zoom level and the year under the pointer fixed, so the pixels per year of dense time never jump; what changes is how much time the frame reaches, since collapsing a gap pulls the next records closer.
+Gaps are computed from the start and end years of the filtered records, so filtering a record out can open new cuts. A re-cut keeps the zoom level and the year under the pointer fixed, so the pixels per year of dense time never jump; what changes is how much time the frame reaches, since collapsing a gap pulls the next records closer.
 
 Years stay the unit of the public API: `setViewRange()`, `filters.fromYear`, axis labels, and the `start`, `end`, and `span` fields of `onViewportChange` are all real years. The viewport payload also reports `timeBreaksEnabled`, `breaks` (collapsed gaps currently in view), `breakCount` (collapsed gaps in the whole map), `skippedYears`, and `compressedSpan` for the internal compressed span.
 
@@ -247,7 +250,8 @@ const scale = buildTimeScale(records, { start: -3000, end: 2026 }, { enabled: tr
 scale.toUnit(1979); // compressed coordinate
 scale.toYear(120); // back to a year
 scale.breaks; // collapsed segments
-scale.breaks[0]?.gapYears; // the empty stretch behind a break, context included
+scale.breaks[0]?.gapYears; // the quiet stretch behind a break, context included
+scale.breaks[0]?.ongoing; // true when a record runs across it
 ```
 
 ## Keyboard

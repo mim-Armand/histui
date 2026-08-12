@@ -88,23 +88,37 @@ assert.ok(denseSpans[0].yearEnd < denseSpans[1].yearStart);
 assert.equal(brokenScale.breaksForRange(0, brokenScale.span).length, 1);
 assert.equal(brokenScale.breaksForRange(0, 1).length, 0);
 
-const emptyBreaks = buildTimeScale([{ __meta: { start: 0, end: 3140 } }, ...breakRecords], breakDomain, { enabled: true });
-assert.equal(emptyBreaks.hasBreaks, false, "a record covering the gap must prevent a break");
+assert.equal(brokenScale.breaks[0].ongoing, false, "nothing covers the gap between the records");
+
+const coveredRecords = [{ __meta: { start: 0, end: 3140 } }, ...breakRecords];
+const coveredBreaks = buildTimeScale(coveredRecords, breakDomain, { enabled: true });
+assert.equal(coveredBreaks.breaks.length, 1, "a quiet stretch is cut even while a record runs across it");
+assert.equal(coveredBreaks.breaks[0].ongoing, true, "a cut inside a record is marked as ongoing");
+assert.equal(
+  buildTimeScale(coveredRecords, breakDomain, { enabled: true, breakOngoing: false }).hasBreaks,
+  false,
+  "breakOngoing: false leaves the axis whole wherever a record covers it"
+);
+assert.equal(
+  buildTimeScale([{ __meta: { start: 0, end: 3140 } }], breakDomain, { enabled: true }).breaks.length,
+  1,
+  "a single long record can be cut on its own"
+);
 assert.equal(TimeScale.identity(breakDomain).hasBreaks, false);
 assert.equal(DEFAULT_HISTUI_CONFIG.timeline.timeBreaks.enabled, false);
+assert.equal(DEFAULT_HISTUI_CONFIG.timeline.timeBreaks.breakOngoing, true);
+assert.equal(normalizeTimeBreakOptions({}).breakOngoing, true);
+assert.equal(normalizeTimeBreakOptions({ breakOngoing: false }).breakOngoing, false);
 
 const zoomedOut = buildTimeScale(breakRecords, breakDomain, { enabled: true }, { viewSpan: 3240 });
 const zoomedIn = buildTimeScale(breakRecords, breakDomain, { enabled: true }, { viewSpan: 100 });
 assert.equal(zoomedOut.breaks.length, 1, "only the wide gap matters when the whole span is in frame");
-assert.equal(zoomedIn.breaks.length, 2, "zooming in must also cut gaps that were small before");
+assert.ok(zoomedIn.breaks.length > 1, "zooming in must also cut stretches that were small before");
+const zoomedWide = zoomedIn.breaks.find((segment) => segment.id === zoomedOut.breaks[0].id);
+assert.ok(zoomedWide, "break ids follow the gap so expanded gaps survive a zoom change");
 assert.ok(
-  zoomedIn.breaks[1].unitSpan < zoomedOut.breaks[0].unitSpan,
+  zoomedWide.unitSpan < zoomedOut.breaks[0].unitSpan,
   "a collapsed gap keeps a share of the frame, not a share of the dataset"
-);
-assert.equal(
-  zoomedIn.breaks[1].id,
-  zoomedOut.breaks[0].id,
-  "break ids follow the gap so expanded gaps survive a zoom change"
 );
 
 const [wideBreak] = zoomedOut.breaks;

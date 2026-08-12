@@ -25,7 +25,7 @@ const TYPE_VARIABLES = {
 };
 
 const MIN_BREAK_BAND_PX = 15;
-const BREAK_GEOMETRY_OPTIONS = ["enabled", "minGapRatio", "minGapYears", "collapsedRatio", "contextRatio", "maxBreaks"];
+const BREAK_GEOMETRY_OPTIONS = ["enabled", "breakOngoing", "minGapRatio", "minGapYears", "collapsedRatio", "contextRatio", "maxBreaks"];
 
 export class TimelineView {
   constructor({ stage, canvas, cards, hint, zoomBar, themeRoot, config, t, language, direction, onSelect, onViewportChange }) {
@@ -545,7 +545,8 @@ export class TimelineView {
       endYear: segment.endYear,
       unitSpan: segment.unitSpan,
       gapStartYear: segment.gapStartYear,
-      gapEndYear: segment.gapEndYear
+      gapEndYear: segment.gapEndYear,
+      ongoing: segment.ongoing
     }));
     for (const id of [...this.expandedBreakIds]) {
       if (!this.breakCatalog.some((entry) => entry.id === id)) this.expandedBreakIds.delete(id);
@@ -1722,6 +1723,7 @@ export class TimelineView {
         gapStartYear: segment.gapStartYear,
         gapEndYear: segment.gapEndYear,
         gapYears: Math.max(1, Math.round(segment.gapYears)),
+        ongoing: segment.ongoing,
         years: Math.max(1, Math.round(segment.yearSpan - segment.unitSpan)),
         startAxis: this.unitToAxis(segment.startUnit, metrics),
         endAxis: this.unitToAxis(segment.endUnit, metrics)
@@ -1736,6 +1738,7 @@ export class TimelineView {
           gapStartYear: entry.gapStartYear,
           gapEndYear: entry.gapEndYear,
           gapYears: Math.max(1, Math.round(entry.gapEndYear - entry.gapStartYear)),
+          ongoing: entry.ongoing,
           years: Math.max(1, Math.round(entry.endYear - entry.startYear)),
           startAxis: this.yearToAxis(entry.startYear, metrics),
           endAxis: this.yearToAxis(entry.endYear, metrics)
@@ -1865,12 +1868,15 @@ export class TimelineView {
 
     // Rebuild only when the set of breaks changes; position and highlight updates
     // happen in place so panning and hovering never replace a node under the pointer.
-    const key = this.lastBreaks.map((entry) => `${entry.id}:${entry.kind}:${entry.label}`).join("|");
+    const key = this.lastBreaks.map((entry) => `${entry.id}:${entry.kind}:${entry.ongoing}:${entry.label}`).join("|");
     if (key !== this.breakMarksKey) {
       this.breakMarksKey = key;
       this.breakLayer.innerHTML = this.lastBreaks.map((entry) => {
         const collapsed = entry.kind === "collapsed";
-        const description = `${this.t("timeBreakYears", { years: formatCount(entry.gapYears, this.language) })} · ${this.t(collapsed ? "timeBreakHint" : "timeBreakCollapseHint")}`;
+        const span = this.t(entry.ongoing ? "timeBreakQuietYears" : "timeBreakYears", {
+          years: formatCount(entry.gapYears, this.language)
+        });
+        const description = `${span} · ${this.t(collapsed ? "timeBreakHint" : "timeBreakCollapseHint")}`;
         const text = entry.label ? `<span>${escapeHtml(entry.label)}</span>` : "";
         return `
           <button class="histui-break-mark ${collapsed ? "is-collapsed" : "is-expanded"}${text ? "" : " is-bare"}" type="button" data-break-id="${escapeHtml(entry.id)}" aria-label="${escapeHtml(description)}" style="--x:${Math.round(entry.chip.x)}px;--y:${Math.round(entry.chip.y)}px;">
@@ -1904,9 +1910,12 @@ export class TimelineView {
     }
 
     const gap = this.breakYearCount(entry.gapYears);
-    if (entry.kind !== "collapsed") return this.t("timeBreakEmpty", { years: gap });
+    // Inside a record the stretch is not a gap between records but a quiet run within one.
+    if (entry.kind !== "collapsed") {
+      return this.t(entry.ongoing ? "timeBreakQuiet" : "timeBreakEmpty", { years: gap });
+    }
     const removed = this.breakYearCount(entry.years);
-    if (mode === "gap") return this.t("timeBreakGap", { years: gap });
+    if (mode === "gap") return this.t(entry.ongoing ? "timeBreakQuiet" : "timeBreakGap", { years: gap });
     if (mode === "both") {
       // Rounding can print the same number twice, which reads as a mistake; spell both
       // out when that happens.
@@ -1944,7 +1953,10 @@ export class TimelineView {
 
     ctx.save();
     if (collapsed) {
-      band(fade(colors.background, 0.97));
+      // An empty cut is painted out, because whatever sits behind it belongs to the years
+      // that were removed. A cut inside a record instead leaves that record's line
+      // running through the band, which is what shows the period did not end here.
+      if (!entry.ongoing) band(fade(colors.background, 0.97));
       band(fade(entry.highlighted ? colors.accent2 : colors.grid, entry.highlighted ? 0.2 : 0.12));
     } else if (entry.highlighted) {
       band(fade(colors.accent2, 0.08));
@@ -2301,12 +2313,19 @@ export class TimelineView {
     const removed = collapsed
       ? `<li>${escapeHtml(this.t("timeBreakRemoved", { years: formatCount(entry.years, this.language) }))}</li>`
       : "";
+    const ongoing = entry.ongoing
+      ? `<li>${escapeHtml(this.t("timeBreakOngoing"))}</li>`
+      : "";
+    const title = collapsed
+      ? this.t(entry.ongoing ? "timeBreakOngoingTitle" : "timeBreakTitle")
+      : this.t("timeBreakOpenTitle");
     this.breakTooltip.innerHTML = `
-      <strong>${escapeHtml(this.t(collapsed ? "timeBreakTitle" : "timeBreakOpenTitle"))}</strong>
+      <strong>${escapeHtml(title)}</strong>
       <ul>
-        <li>${escapeHtml(this.t("timeBreakYears", { years: formatCount(entry.gapYears, this.language) }))}</li>
+        <li>${escapeHtml(this.t(entry.ongoing ? "timeBreakQuietYears" : "timeBreakYears", { years: formatCount(entry.gapYears, this.language) }))}</li>
         <li>${escapeHtml(range)}</li>
         ${removed}
+        ${ongoing}
       </ul>
       <span>${escapeHtml(this.t(collapsed ? "timeBreakHint" : "timeBreakCollapseHint"))}</span>
     `;

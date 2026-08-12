@@ -38,6 +38,7 @@ export const DEFAULT_HISTUI_CONFIG = {
     timeBreaks: {
       enabled: false,
       label: "gap",
+      breakOngoing: true,
       minGapRatio: 0.12,
       minGapYears: 0,
       collapsedRatio: 0.022,
