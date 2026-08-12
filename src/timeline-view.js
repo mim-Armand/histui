@@ -1805,7 +1805,7 @@ export class TimelineView {
           ? placement.x - placement.width / 2
           : placement.x;
       const top = placement.y - placement.height / 2;
-      return { left, right: left + placement.width, top, bottom: top + placement.height };
+      return { kind: "card", left, right: left + placement.width, top, bottom: top + placement.height };
     });
   }
 
@@ -1813,28 +1813,43 @@ export class TimelineView {
     const width = entry.label ? entry.label.length * 6.2 + 34 : 24;
     const height = 20;
     // Year ranges make for wide chips, so every candidate spot is kept on the stage.
-    const anchor = (rank) => {
+    const anchor = (rank, slide) => {
       const spot = this.breakLabelAnchor(metrics, entry, rank);
       const inset = (value, chipSize, stageSize) => {
         const edge = chipSize / 2 + 4;
         return clamp(value, edge, Math.max(edge, stageSize - edge));
       };
       return {
-        x: inset(spot.x, width, metrics.width),
+        x: inset(spot.x + slide, width, metrics.width),
         y: inset(spot.y, height, metrics.height)
       };
     };
-    let position = anchor(0);
-    for (let rank = 1; rank <= 6 && obstacles.some((box) => boxOverlapsChip(box, position, width, height)); rank += 1) {
-      position = anchor(rank);
+    // Two chips on the same spot are unreadable, while a chip over a card only dims the
+    // card, so every candidate is scored instead of taking the first free one. Sliding
+    // sideways loosens the tie to the band below, so it costs more than moving outwards.
+    const slides = [0, width * 0.7, width * -0.7];
+    let best = null;
+    // Every candidate costs at least its own rank, so the search stops as soon as the
+    // best spot so far is cheaper than anything the remaining tiers could offer.
+    for (let rank = 0; rank <= 8 && (!best || best.penalty > rank); rank += 1) {
+      for (const slide of slides) {
+        const position = anchor(rank, slide);
+        let penalty = rank + Math.abs(slide) / width * 14;
+        for (const box of obstacles) {
+          const chip = box.kind === "chip";
+          if (boxOverlapsChip(box, position, width + (chip ? 8 : 0), height)) penalty += chip ? 400 : 40;
+        }
+        if (!best || penalty < best.penalty) best = { penalty, position };
+      }
     }
     return {
-      x: position.x,
-      y: position.y,
-      left: position.x - width / 2,
-      right: position.x + width / 2,
-      top: position.y - height / 2,
-      bottom: position.y + height / 2
+      kind: "chip",
+      x: best.position.x,
+      y: best.position.y,
+      left: best.position.x - width / 2,
+      right: best.position.x + width / 2,
+      top: best.position.y - height / 2,
+      bottom: best.position.y + height / 2
     };
   }
 
@@ -1985,10 +2000,11 @@ export class TimelineView {
     const tier = Math.ceil(rank / 2);
     const mirrored = rank % 2 === 1;
     if (metrics.orientation === "horizontal") {
-      // Odd ranks mirror the chip across the axis, even ranks push it further out.
-      // Either way it stays on the band, which spans the whole frame.
+      // Odd ranks mirror the chip across the axis, even ranks push it further out, up to
+      // the edge of the hatched band so the chip never floats away from its own cut.
       const side = (metrics.placement === "side-end" ? 1 : -1) * (mirrored ? -1 : 1);
-      const distance = 32 + (mirrored ? tier - 1 : tier) * 30;
+      const reach = clamp(metrics.height * 0.3, 48, 190);
+      const distance = Math.min(32 + (mirrored ? tier - 1 : tier) * 30, Math.max(32, reach - 14));
       return {
         x: clamp(entry.axis, 58, Math.max(58, metrics.width - 58)),
         y: clamp(axis + side * distance, 16, Math.max(16, metrics.height - 16))
