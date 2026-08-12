@@ -235,7 +235,7 @@ export function buildTimeScale(
   records: any[],
   domain: { start: number; end: number },
   options?: HistuiTimeBreakConfig,
-  context?: { viewSpan?: number }
+  context?: { viewSpan?: number; viewYears?: number }
 ): TimeScale;
 export function normalizeTimeBreakOptions(options?: HistuiTimeBreakConfig): Required<HistuiTimeBreakConfig>;
 export const DEFAULT_TIME_BREAK_OPTIONS: Required<HistuiTimeBreakConfig>;

@@ -110,6 +110,23 @@ assert.equal(DEFAULT_HISTUI_CONFIG.timeline.timeBreaks.breakOngoing, true);
 assert.equal(normalizeTimeBreakOptions({}).breakOngoing, true);
 assert.equal(normalizeTimeBreakOptions({ breakOngoing: false }).breakOngoing, false);
 
+// Cutting shortens the axis, so the frame the next cut is judged against shrinks too.
+// Feeding that back must not lower the bar, or the axis keeps cutting itself until no
+// dense time is left to zoom into.
+let cascadeSpan = breakDomain.end - breakDomain.start;
+const cascadeYears = cascadeSpan;
+const cascadeCounts = [];
+for (let pass = 0; pass < 5; pass += 1) {
+  const scale = buildTimeScale(coveredRecords, breakDomain, { enabled: true }, {
+    viewSpan: cascadeSpan,
+    viewYears: cascadeYears
+  });
+  cascadeSpan = scale.span;
+  cascadeCounts.push(scale.breaks.length);
+}
+assert.deepEqual(cascadeCounts, [1, 1, 1, 1, 1], "re-cutting for the shortened axis must not find new gaps");
+assert.ok(cascadeSpan > 250, `the axis must keep its dense time, kept ${cascadeSpan} units`);
+
 const zoomedOut = buildTimeScale(breakRecords, breakDomain, { enabled: true }, { viewSpan: 3240 });
 const zoomedIn = buildTimeScale(breakRecords, breakDomain, { enabled: true }, { viewSpan: 100 });
 assert.equal(zoomedOut.breaks.length, 1, "only the wide gap matters when the whole span is in frame");
@@ -119,6 +136,16 @@ assert.ok(zoomedWide, "break ids follow the gap so expanded gaps survive a zoom 
 assert.ok(
   zoomedWide.unitSpan < zoomedOut.breaks[0].unitSpan,
   "a collapsed gap keeps a share of the frame, not a share of the dataset"
+);
+
+// A compressed frame holds far more years than units, and it is the years on screen that
+// decide what counts as a long stretch: 100 units reaching across 3,240 years is still a
+// wide view, so it gets the wide view's single cut.
+const compressed = buildTimeScale(breakRecords, breakDomain, { enabled: true }, { viewSpan: 100, viewYears: 3240 });
+assert.equal(compressed.breaks.length, 1, "the bar follows the years on screen, not the units");
+assert.ok(
+  compressed.breaks[0].unitSpan < zoomedOut.breaks[0].unitSpan,
+  "the room a cut takes still follows the units, so a tight frame keeps a thin band"
 );
 
 const [wideBreak] = zoomedOut.breaks;

@@ -66,8 +66,10 @@ export class TimelineView {
     this.lastBreaks = [];
     this.breakMarksKey = "";
     // The view span and options the break map was cut for, so zoom or option changes can
-    // tell when it has to be cut again.
+    // tell when it has to be cut again. The span is axis units, the reach is the years
+    // those units covered, and the two drift apart as cuts appear.
     this.scaleViewSpan = 0;
+    this.scaleViewYears = 0;
     this.scaleOptions = null;
     this.rescalingTimeScale = false;
     // domain, extent and view are axis units, not years: identical to years while
@@ -362,6 +364,7 @@ export class TimelineView {
     this.expandedCluster = null;
     this.expandedBreakIds.clear();
     this.scaleViewSpan = 0;
+    this.scaleViewYears = 0;
     this.computeDomain();
     if (resetView || !records.some((record) => record.id === this.selectedId)) {
       this.fit();
@@ -493,7 +496,8 @@ export class TimelineView {
     if (!this.rescalingTimeScale) {
       this.rescalingTimeScale = true;
       for (let pass = 0; pass < 3; pass += 1) {
-        if (!this.rescaleForZoom(this.domain.end - this.domain.start)) break;
+        const years = this.timeScale.toYear(this.domain.end) - this.timeScale.toYear(this.domain.start);
+        if (!this.rescaleForZoom(this.domain.end - this.domain.start, { viewYears: years })) break;
       }
       this.rescalingTimeScale = false;
     }
@@ -529,7 +533,7 @@ export class TimelineView {
     this.applyTimeScale(this.createTimeScale());
   }
 
-  createTimeScale(viewSpan = this.scaleViewSpan) {
+  createTimeScale(viewSpan = this.scaleViewSpan, viewYears = this.scaleViewYears) {
     const options = this.getTimeBreakOptions();
     // Remembered so a later option change can tell a different cut from a different label.
     this.scaleOptions = options;
@@ -538,7 +542,7 @@ export class TimelineView {
       return TimeScale.identity(this.yearDomain);
     }
 
-    const scale = buildTimeScale(this.records, this.yearDomain, options, { viewSpan });
+    const scale = buildTimeScale(this.records, this.yearDomain, options, { viewSpan, viewYears });
     this.breakCatalog = scale.breaks.map((segment) => ({
       id: segment.id,
       startYear: segment.startYear,
@@ -575,8 +579,10 @@ export class TimelineView {
     // Enabling breaks or changing their options keeps the visible years and cuts the
     // axis for the zoom the viewer is already at.
     const frame = this.scaleFrameFor(this.view.end - this.view.start);
-    this.applyTimeScale(this.createTimeScale(frame));
+    const reach = this.scaleFrameFor(previousYears ? previousYears.end - previousYears.start : frame);
+    this.applyTimeScale(this.createTimeScale(frame, reach));
     this.scaleViewSpan = this.timeBreaksEnabled ? frame : 0;
+    this.scaleViewYears = this.timeBreaksEnabled ? reach : 0;
     this.hoveredBreakId = null;
     if (!previousYears) {
       this.fit();
@@ -599,24 +605,46 @@ export class TimelineView {
     return Math.max(viewSpan, this.config.timeline?.minZoomSpanYears || 2);
   }
 
+  // Within tolerance of the size the map was cut for, so cutting it again would only
+  // shuffle the same cuts around.
+  settled(next, previous, tolerance) {
+    return previous > 0 && next < previous * tolerance && next > previous / tolerance;
+  }
+
+  viewYearSpan() {
+    const years = this.getViewYearRange();
+    return years.end - years.start;
+  }
+
   /**
    * Re-cuts the axis for a new zoom level. The unit span is kept, so the pixels per
    * dense year stay put and the frame simply reaches further once a gap collapses;
    * `anchorYear` stays at `anchorFraction` of the frame so the point under the
    * cursor (or the centre) does not slide while the map changes underneath.
+   *
+   * `viewYears` is how much history that span reaches across. Both sizes are kept,
+   * because either one moving is a reason to cut again: the span decides how much
+   * room a cut gets, the years decide which stretches are worth cutting.
    */
-  rescaleForZoom(viewSpan, { anchorYear = null, anchorFraction = 0.5 } = {}) {
+  rescaleForZoom(viewSpan, { anchorYear = null, anchorFraction = 0.5, viewYears } = {}) {
     if (!this.timeBreaksEnabled || !this.records.length || !(viewSpan > 0)) return false;
     const frame = this.scaleFrameFor(viewSpan);
-    const previous = this.scaleViewSpan;
+    // The years the frame reaches across jump the moment a cut appears or goes, so a plain
+    // reading would flip between "cut a lot" and "cut little" on every zoom step. Blending
+    // it with the reach the map was cut for settles on one answer instead.
+    const measured = this.scaleFrameFor(Number.isFinite(viewYears) ? viewYears : this.viewYearSpan());
+    const reach = this.scaleViewYears > 0 ? Math.sqrt(measured * this.scaleViewYears) : measured;
     const tolerance = 1 + this.getTimeBreakOptions().zoomSyncRatio;
-    if (previous > 0 && frame < previous * tolerance && frame > previous / tolerance) return false;
+    const same = this.settled(frame, this.scaleViewSpan, tolerance)
+      && this.settled(reach, this.scaleViewYears, tolerance);
+    if (same) return false;
 
     const anchor = Number.isFinite(anchorYear)
       ? anchorYear
       : this.timeScale.toYear((this.view.start + this.view.end) / 2);
-    this.applyTimeScale(this.createTimeScale(frame));
+    this.applyTimeScale(this.createTimeScale(frame, reach));
     this.scaleViewSpan = frame;
+    this.scaleViewYears = reach;
     const start = this.timeScale.toUnit(anchor) - anchorFraction * viewSpan;
     this.view = { start, end: start + viewSpan };
     this.clampView();
@@ -637,7 +665,7 @@ export class TimelineView {
     let changed = false;
     try {
       for (let pass = 0; pass < 3; pass += 1) {
-        if (!this.rescaleForZoom(this.view.end - this.view.start, pass === 0 ? anchor : undefined)) break;
+        if (!this.rescaleForZoom(this.view.end - this.view.start, { ...(pass === 0 ? anchor : {}), viewYears: this.viewYearSpan() })) break;
         changed = true;
       }
     } finally {
@@ -661,12 +689,11 @@ export class TimelineView {
   }
 
   setViewYearRange(startYear, endYear, options) {
-    // Cutting the axis changes how many units those years take, which changes the zoom
-    // the map should be cut for, so let the two settle before placing the view.
-    for (let pass = 0; pass < 3; pass += 1) {
-      const range = this.unitRangeForYears(startYear, endYear);
-      if (!this.rescaleForZoom(range.end - range.start)) break;
-    }
+    // The axis is cut as if the requested years were dense. Measuring the frame through
+    // the map instead would chase itself: each cut inside the range leaves fewer units to
+    // ask for, which cuts thinner, until the whole axis is shorter than the request.
+    const years = Math.abs(endYear - startYear);
+    this.rescaleForZoom(years, { viewYears: years });
     const range = this.unitRangeForYears(startYear, endYear);
     this.setViewRange(range.start, range.end, { ...options, sync: false });
   }

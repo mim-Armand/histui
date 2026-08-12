@@ -213,7 +213,9 @@ The built-in controls include a `Skip empty time` toggle. Each collapsed gap is 
 
 Chips spell the years out, because compact notation would round `gap` and `removed` to the same figure; only spans past 100,000 years, which means deep time rather than history, fall back to a compact form.
 
-Breaks follow the zoom. Whether a gap feels long depends on how much of the frame it takes, not on how many years it holds: 300 empty years are invisible across a millennium and half the screen across a century. Every threshold is therefore a fraction of the visible span, and the axis is re-cut whenever the zoom changes by more than `zoomSyncRatio`, so zooming in keeps cutting the newly dominant gaps instead of reopening the empty runs. Panning never re-cuts anything.
+Breaks follow the zoom. Whether a stretch feels long depends on how much of the view it takes, not on how many years it holds: 300 quiet years are invisible across a millennium and half the screen across a century. A stretch is therefore cut once it passes `minGapRatio` of the time currently on screen, and the axis is re-cut whenever the zoom moves by more than `zoomSyncRatio`, so zooming in keeps cutting the newly dominant stretches instead of reopening the quiet runs. Panning never re-cuts anything.
+
+The time on screen is measured in real years, not in the axis units the cuts shorten. That distinction is what keeps deep zoom working: judging a stretch against the shortened axis would let every cut lower the bar for the next one, and the cascade would strip the axis of the dense time zooming in is meant to resolve. How much room a cut takes is still a share of the frame in units, so a tight frame keeps a thin band. Because that reading jumps whenever a cut appears, each re-cut blends it with the reach the map was last cut for, which settles on one answer rather than alternating between two.
 
 Behaviour is tuned through `config.timeline.timeBreaks`:
 
@@ -222,9 +224,9 @@ Behaviour is tuned through `config.timeline.timeBreaks`:
 | `enabled` | `false` | Collapse empty time by default. |
 | `label` | `"gap"` | What each chip reports: `"gap"`, `"removed"`, `"both"`, `"range"`, or `"none"`. |
 | `breakOngoing` | `true` | Also cut quiet stretches a record runs across, such as the middle of a long period. |
-| `minGapRatio` | `0.12` | Minimum gap size, as a fraction of the visible span, before it can be collapsed. |
-| `minGapYears` | `0` | Absolute floor in years for a collapsible gap. |
-| `collapsedRatio` | `0.022` | Width each collapsed gap keeps, as a fraction of the visible span. |
+| `minGapRatio` | `0.12` | Minimum stretch size, as a fraction of the years on screen, before it can be collapsed. |
+| `minGapYears` | `0` | Absolute floor in years for a collapsible stretch. |
+| `collapsedRatio` | `0.022` | Width each collapsed stretch keeps, as a fraction of the frame in axis units. |
 | `contextRatio` | `0.12` | Share of a gap left uncollapsed on each side, so records keep breathing room. |
 | `maxBreaks` | `240` | Largest number of gaps to collapse; the widest gaps win. |
 | `zoomSyncRatio` | `0.18` | How far the zoom must move before the axis is re-cut. Larger values re-cut less often. |
@@ -244,9 +246,15 @@ import {
   TIME_BREAK_LABELS
 } from "@mim/histui";
 
-// The fourth argument is the zoom level: how many units fit in the frame.
-// Omit it to cut the axis as if the whole dataset were in view.
-const scale = buildTimeScale(records, { start: -3000, end: 2026 }, { enabled: true }, { viewSpan: 400 });
+// The fourth argument is the zoom level: `viewSpan` is how many units fit in the frame,
+// `viewYears` how much history those units reach across. They differ once cuts exist, and
+// `viewYears` defaults to `viewSpan`. Omit both to cut as if the whole dataset were in view.
+const scale = buildTimeScale(
+  records,
+  { start: -3000, end: 2026 },
+  { enabled: true },
+  { viewSpan: 400, viewYears: 1800 }
+);
 scale.toUnit(1979); // compressed coordinate
 scale.toYear(120); // back to a year
 scale.breaks; // collapsed segments

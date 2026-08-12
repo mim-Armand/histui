@@ -205,13 +205,18 @@ export class TimeScale {
 /**
  * Builds the mapping for a given zoom level.
  *
- * `viewSpan` is how many units currently fit in the frame. Because dense segments
- * are 1:1, it doubles as "how many dense years the viewer can see", which is what
- * makes a gap feel long or short: 300 empty years are nothing across a millennium
- * and half the screen across a century. Every threshold is therefore a fraction of
- * `viewSpan`, so zooming in re-cuts the axis instead of reopening the empty runs.
+ * Two sizes describe that zoom level, and they only differ once cuts exist:
+ *
+ * - `viewSpan`: how many units fit in the frame, which is the room a cut may take.
+ * - `viewYears`: how much history that frame shows, which is what makes a stretch
+ *   long or short. 300 quiet years are nothing across a millennium and half the
+ *   screen across a century, so the bar is a fraction of the time on screen.
+ *
+ * Measuring the bar against `viewSpan` instead would feed on itself: every cut
+ * shortens the axis, which shortens the frame, which lowers the bar, which cuts
+ * again, until no dense time is left to zoom into.
  */
-export function buildTimeScale(records, domain, options = {}, { viewSpan } = {}) {
+export function buildTimeScale(records, domain, options = {}, { viewSpan, viewYears } = {}) {
   const settings = normalizeTimeBreakOptions(options);
   const identity = TimeScale.identity(domain);
   if (!settings.enabled || !records?.length) return identity;
@@ -220,7 +225,9 @@ export function buildTimeScale(records, domain, options = {}, { viewSpan } = {})
   if (!(domainSpan > 0)) return identity;
 
   const frame = Number.isFinite(viewSpan) && viewSpan > 0 ? Math.min(viewSpan, domainSpan) : domainSpan;
-  const minGapYears = Math.max(settings.minGapYears, frame * settings.minGapRatio);
+  // Dense time is 1:1, so the frame can never show fewer years than units.
+  const reach = Number.isFinite(viewYears) && viewYears > frame ? Math.min(viewYears, domainSpan) : frame;
+  const minGapYears = Math.max(settings.minGapYears, reach * settings.minGapRatio);
   const gaps = quietStretches(records, minGapYears)
     .filter((stretch) => settings.breakOngoing || !stretch.ongoing);
   if (!gaps.length) return identity;
